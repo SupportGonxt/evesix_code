@@ -1,0 +1,462 @@
+
+from kivy.uix.screenmanager import Screen
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.label import Label
+from kivy.clock import Clock
+from kivy.uix.dropdown import DropDown
+from kivy.uix.button import Button
+from kivy.uix.textinput import TextInput
+from gpiozero import OutputDevice, MotionSensor
+from time import sleep
+from rpi5_ws2812.ws2812 import Color, WS2812SpiDriver
+import time
+import lgpio
+from datetime import datetime
+import mysql.connector
+
+#pir = MotionSensor(12)
+
+
+class PageOne(Screen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.main_layout = BoxLayout(orientation='vertical', padding=10)
+        self.create_main_content()
+        self.add_widget(self.main_layout)
+        self.user_inputs = {}
+
+        # Initialize the WS2812 strip with 38 LEDs and SPI channel 0, CE0
+        self.strip = WS2812SpiDriver(spi_bus=0, spi_device=0, led_count=67).get_strip()
+
+
+        self.strip.set_all_pixels(Color(0, 255, 0))
+        self.strip.show()
+
+
+
+    def add_back_button(self, callback):
+        """Add a back button to the top left of the layout."""
+        back_button = Button(
+            text="< Back",
+            size_hint=(None, None),
+            background_color=(0, 153/255, 1, 1),
+            size=(100, 50),
+            pos_hint={'x': 0, 'top': 1}
+        )
+        back_button.bind(on_release=callback)
+        self.main_layout.add_widget(back_button)
+
+    def create_main_content(self):
+        self.main_layout.clear_widgets()
+
+        # Create "BEGIN ROBOT" label as a button to make it clickable
+        begin_label = Button(
+            text="BEGIN ROBOT",
+            font_size=60,
+            color=(0, 153/255, 1, 1),
+            background_normal='',
+            background_color=(0.1, 0.1, 0.1, 0.1),  # Transparent background
+            bold=True,
+            size_hint=(1, 0.3)
+        )
+        begin_label.bind(on_release=self.show_hospital_selection)
+        self.main_layout.add_widget(begin_label)
+
+    def show_hospital_selection(self, instance):
+        self.main_layout.clear_widgets()
+
+        # Add back button
+        # self.add_back_button(self.create_main_content)
+
+        # Create a BoxLayout for the dropdown to center align it
+        center_layout = BoxLayout(orientation='vertical', size_hint=(None, None), size=(400, 300), spacing=20, pos_hint={'center_x': 0.5, 'center_y': 0.5})
+
+        # Add instruction label
+        instruction_label = Label(
+            text="Select Hospital:",
+            font_size=60,
+            bold=True,
+            color=(0, 153/255, 1, 1),
+            halign='center'
+        )
+        center_layout.add_widget(instruction_label)
+
+        # Create dropdown for hospital selection
+        dropdown = DropDown()
+        hospitals = ['Hospital 1', 'Hospital 2', 'Hospital 3', 'Hospital 4', 'Hospital 5']
+
+        for hospital in hospitals:
+            btn = Button(
+                text=hospital,
+                size_hint_y=None,
+                background_color=(0, 153/255, 1, 1),
+                height=100,
+                on_release=lambda btn: self.select_hospital(btn.text, dropdown)
+            )
+            dropdown.add_widget(btn)
+
+        self.hospital_button = Button(
+            text='Select a hospital',
+            size_hint=(1, None),
+            background_color=(0, 153/255, 1, 1),
+            height=100
+        )
+        self.hospital_button.bind(on_release=dropdown.open)
+        dropdown.bind(on_select=lambda instance, x: setattr(self.hospital_button, 'text', x))
+
+        center_layout.add_widget(self.hospital_button)
+
+        # Add Submit button
+        submit_button = Button(
+            text="Submit",
+            size_hint=(1, None),
+            height=77,
+            background_color=(0, 153/255, 1, 1),
+            on_release=self.submit_hospital_selection
+        )
+        center_layout.add_widget(submit_button)
+
+        self.main_layout.add_widget(center_layout)
+
+    def select_hospital(self, text, dropdown):
+        self.hospital_button.text = text
+        dropdown.dismiss()
+
+    def submit_hospital_selection(self, instance):
+        selected_hospital = self.hospital_button.text
+        if selected_hospital.startswith('Select'):
+            print("Please select a hospital.")
+        else:
+            self.user_inputs['Hospital'] = selected_hospital
+            self.show_ward_selection()  # Navigate to the next page for ward selection
+
+    def show_ward_selection(self):
+        self.main_layout.clear_widgets()
+
+        # Add back button
+        self.add_back_button(self.show_hospital_selection)
+
+        # Create a BoxLayout for the dropdown to center align it
+        center_layout = BoxLayout(orientation='vertical', size_hint=(None, None), size=(400, 300), spacing=20, pos_hint={'center_x': 0.5, 'center_y': 0.5})
+
+        # Add instruction label
+        instruction_label = Label(
+            text="Select Ward Number:",
+            font_size=60,
+            bold=True,
+            color=(0, 153/255, 1, 1),
+            halign='center'
+        )
+        center_layout.add_widget(instruction_label)
+
+        # Create dropdown for ward selection
+        dropdown = DropDown()
+        wards = [f'Ward {i}' for i in range(1, 11)]
+
+        for ward in wards:
+            btn = Button(
+                text=ward,
+                size_hint_y=None,
+                background_color=(0, 153/255, 1, 1),
+                height=77,
+                on_release=lambda btn: self.select_ward(btn.text, dropdown)
+            )
+            dropdown.add_widget(btn)
+
+        self.ward_button = Button(
+            text='Select a ward',
+            size_hint=(1, None),
+            background_color=(0, 153/255, 1, 1),
+            height=77
+        )
+        self.ward_button.bind(on_release=dropdown.open)
+        dropdown.bind(on_select=lambda instance, x: setattr(self.ward_button, 'text', x))
+
+        center_layout.add_widget(self.ward_button)
+
+        # Add Submit button
+        submit_button = Button(
+            text="Submit",
+            size_hint=(1, None),
+            height=77,
+            background_color=(0, 153/255, 1, 1),
+            on_release=self.submit_ward_selection
+        )
+        center_layout.add_widget(submit_button)
+
+        self.main_layout.add_widget(center_layout)
+
+    def select_ward(self, text, dropdown):
+        self.ward_button.text = text
+        dropdown.dismiss()
+
+    def submit_ward_selection(self, instance):
+        selected_ward = self.ward_button.text
+        if selected_ward.startswith('Select'):
+            print("Please select a ward.")
+        else:
+            self.user_inputs['Ward'] = selected_ward
+            self.show_bed_selection()  # Navigate to the next page for bed selection
+
+    def show_bed_selection(self):
+        self.main_layout.clear_widgets()
+
+        # Add back button
+        self.add_back_button(self.show_ward_selection)
+
+        # Create a BoxLayout for the dropdown to center align it
+        center_layout = BoxLayout(orientation='vertical', size_hint=(None, None), size=(400, 300), spacing=20, pos_hint={'center_x': 0.5, 'center_y': 0.5})
+
+        # Add instruction label
+        instruction_label = Label(
+            text="Select Bed Number:",
+            font_size=60,
+            bold=True,
+            color=(0, 153/255, 1, 1),
+            halign='center'
+        )
+        center_layout.add_widget(instruction_label)
+
+        # Create dropdown for bed selection
+        dropdown = DropDown()
+        beds = [f'Bed {i}' for i in range(1, 11)]
+
+        for bed in beds:
+            btn = Button(
+                text=bed,
+                size_hint_y=None,
+                height=77,
+                background_color=(0, 153/255, 1, 1),
+                on_release=lambda btn: self.select_bed(btn.text, dropdown)
+            )
+            dropdown.add_widget(btn)
+
+        self.bed_button = Button(
+            text='Select a bed',
+            background_color=(0, 153/255, 1, 1),
+            size_hint=(1, None),
+            height=77
+        )
+        self.bed_button.bind(on_release=dropdown.open)
+        dropdown.bind(on_select=lambda instance, x: setattr(self.bed_button, 'text', x))
+
+        center_layout.add_widget(self.bed_button)
+
+        # Add Submit button
+        submit_button = Button(
+            text="Submit",
+            size_hint=(1, None),
+            height=77,
+            background_color=(0, 153/255, 1, 1),
+            on_release=self.submit_bed_selection
+        )
+        center_layout.add_widget(submit_button)
+
+        self.main_layout.add_widget(center_layout)
+
+    def select_bed(self, text, dropdown):
+        self.bed_button.text = text
+        dropdown.dismiss()
+
+    def submit_bed_selection(self, instance):
+        selected_bed = self.bed_button.text
+        if selected_bed.startswith('Select'):
+            print("Please select a bed.")
+        else:
+            self.user_inputs['Bed'] = selected_bed
+            self.show_summary()  # Show summary of inputs
+
+    def show_summary(self):
+        self.main_layout.clear_widgets()
+
+        # Add back button
+        self.add_back_button(self.show_bed_selection)
+
+        # Display summary of user inputs
+        summary_label = Label(
+            text="Summary of Inputs:",
+            font_size=50,
+            color=(0, 153/255, 1, 1),
+            bold=True,
+            halign='center'
+        )
+        self.main_layout.add_widget(summary_label)
+
+        for key, value in self.user_inputs.items():
+            input_label = Label(
+                text=f"{key}: {value}",
+                font_size=40,
+                color=(0, 153/255, 1, 1),
+                halign='center'
+            )
+            self.main_layout.add_widget(input_label)
+
+        # Add Start Robot button
+        start_robot_button = Button(
+            text="Start Robot",
+            font_size=40,
+            size_hint=(1, None),
+            background_color=(0, 153/255, 1, 1),
+            height=60,
+            on_release=self.start_robot
+        )
+        self.main_layout.add_widget(start_robot_button)
+
+    def start_robot(self, instance):
+        # Print the inputs (if needed)
+        print("Robot started with the following inputs:")
+        for key, value in self.user_inputs.items():
+            print(f"{key}: {value}")
+
+        # Start the initial countdown
+        self.start_initial_countdown()
+
+    def start_initial_countdown(self):
+        self.main_layout.clear_widgets()
+        self.countdown_label = Label(
+            text="You have \n 60 seconds \n to leave the room",
+            font_size=65,
+            color=(0, 153/255, 1, 1),
+            bold=True
+        )
+        self.main_layout.add_widget(self.countdown_label)
+        self.countdown_time = 60 #leave the room count down
+        Clock.schedule_interval(self.update_initial_countdown, 1)
+
+        # Set all LEDs to orange
+        self.strip.set_all_pixels(Color(255, 165, 0))
+        self.strip.show()
+        print("ORANGE LED is activated")
+
+    def update_initial_countdown(self, dt):
+        if self.countdown_time > 0:
+            self.countdown_label.text = f"You have \n {self.countdown_time} seconds \n to leave the room"
+            self.countdown_time -= 1
+        else:
+            Clock.unschedule(self.update_initial_countdown)
+            self.start_ten_minute_countdown()
+            # Turn off all LEDs     turn red
+            self.strip.set_all_pixels(Color(255, 0, 0))
+            self.strip.show()
+
+    def start_ten_minute_countdown(self):
+        self.main_layout.clear_widgets()
+        self.countdown_label = Label(
+            text="10:00",
+            font_size=200,
+            color=(0, 153/255, 1, 1),
+            bold=True
+        )
+        self.main_layout.add_widget(self.countdown_label)
+        self.countdown_time = 600  # 10 minutes in seconds
+        Clock.schedule_interval(self.update_ten_minute_countdown, 1)
+
+
+        # Set all LEDs to red
+        self.strip.set_all_pixels(Color(255, 0, 0))
+        self.strip.show()
+        print("RES LED is activated")
+        time.sleep(2)  # Wait for 2 seconds
+
+        # Initialize the relay
+#        self.h = lgpio.gpiochip_open(0)
+#        lgpio.gpio_claim_output(self.h, 20)
+#        lgpio.gpio_write(self.h, 20, False)  # Turn relay on when countdown starts
+        print("Relay 20 is activated")
+
+
+        # Schedule the relay to turn off after 10 minutes
+ #       self.turn_off_relay
+        # Set all LEDs to GREEN
+        self.strip.set_all_pixels(Color(0, 255, 0))
+        self.strip.show()
+
+
+
+#    def turn_off_relay(self, dt):
+#        lgpio.gpio_write(self.h, 20, True)  # Turn relay off
+#        print("Relay 20 is deactivated")
+#        lgpio.gpiochip_close(self.h)
+
+#    def turn_off_relay(self):
+#        Timer_Duration = 60
+#        PIR_MOTTION = MotionSensor(1)
+#        start_time = time.time()
+#        try:
+#            while True:
+#                elapsed_time = int(time.time() - start_time)
+#                remaining_time = max(Timer_Duration - elapsed_time, 0)
+#              if PIR_MOTION.motion_detected:
+#                    break
+#                if remianing_time == 0:
+#                    break
+#        finally:
+#            lgpio.gpio_write(self.h, 20, True)
+#            lgpio,gpiochip_close(self.h)
+#            Clock.unschedule(self.update_ten_minute_countdown)
+
+
+    def update_ten_minute_countdown(self, dt):
+        start_time =  time.localtime()
+        PIR_MOTION = MotionSensor(1)
+        self.detect = False
+        if PIR_MOTION.motion_detected:
+            self.countdown_time -= 600
+            lgpio.gpio_write(self.h, 20, True)
+            lgpio.gpiochip_close(self.h)
+            self.detect =  True
+
+        if self.countdown_time > 0:
+            minutes, seconds = divmod(self.countdown_time, 60)
+            self.countdown_label.text = f"{minutes:02}:{seconds:02}"
+            self.countdown_time -= 1
+
+        else:
+            if self.detect == True:
+                 Clock.unschedule(self.update_ten_minute_countdown)
+                 self.countdown_label.text = "MOTION DETECTED"
+                 self.countdown_label.font_size = '50pt'
+                 self.back_button = Button(
+                  text="Back",
+                  size_hint=(0.2, 0.1),
+                  pos_hint={'x': 0, 'top': 1},    
+                  background_color=(0, 153/255, 1, 1))
+                 self.back_button.bind(on_release=self.go_to_begin_robot_page)
+                 self.add_widget(self.back_button)
+                 end_time = datetime.now()
+                 reason = self.countdown.label.text
+            else:
+                 Clock.unschedule(self.update_ten_minute_countdown)
+                 self.countdown_label.text = "SUCCESSFUL \n WAIT FOR \n 5sec TO \n RESTART"
+                 self.countdown_label.font_size = '50pt'
+                 end_time = datetime.now()
+                 reason = self.countdown.label.text
+
+        mydb = mysql.connector.connect(
+            host="13.245.89.170",
+            user="robot",
+            password="robot123#",
+            database="snipeit"
+            )
+        mycursor = mydb.cursor()
+        mycursor.execute('INSERT INTO device_data (serial, Location1, Location2, Location3,startTime,endTime, Diagnostic, code) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)', ('Devbot', self.hospital, self.ward, self.bed, start_time, end_time, 'OK', reason))
+        mydb.commit()
+            # Add a back button at the top left
+        self.back_button = Button(
+                       text="Back",
+                       size_hint=(0.2, 0.1),
+                       pos_hint={'x': 0, 'top': 1},
+                       background_color=(0, 153/255, 1, 1)
+                       )
+        self.back_button.bind(on_release=self.go_to_begin_robot_page)
+        self.add_widget(self.back_button)
+
+            # Set all LEDs back to red
+        self.strip.set_all_pixels(Color(0, 255, 0))
+        self.strip.show()
+
+    def go_to_begin_robot_page(self, instance):
+        self.remove_widget(self.back_button)
+        self.create_main_content()
+
+

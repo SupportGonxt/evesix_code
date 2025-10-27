@@ -1,0 +1,199 @@
+import kivy
+from kivy.app import App
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.button import Button
+from kivy.uix.image import Image
+from kivy.uix.label import Label
+from kivy.uix.screenmanager import ScreenManager, Screen
+from kivy.graphics import Color, Rectangle
+from kivy.clock import Clock
+
+kivy.require('2.0.0')
+
+# Import pages from pages.py
+from pages import PageTwo, PageThree, FormPage, SettingsPage
+from pageOne import PageOne
+
+class SplashScreen(Screen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.add_widget(Image(source='images/netcarelogo.png', size_hint=(1, 1)))
+        self.splash_time = 5  # 10 minutes
+        Clock.schedule_interval(self.update_splash_screen, 1)
+
+    def update_splash_screen(self, dt):
+        self.splash_time -= 1
+        if self.splash_time <= 0:
+            Clock.unschedule(self.update_splash_screen)
+            self.manager.current = 'page_one'  # Switch to PageOne after splash
+
+class Dashboard(BoxLayout):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.orientation = 'vertical'
+
+        # Header layout with gold background
+        header = BoxLayout(orientation='horizontal', size_hint_y=0.1, padding=10, spacing=10)
+        with header.canvas.before:
+            Color(1, 0.84, 0, 1)  # Gold color
+            self.header_rect = Rectangle(size=header.size, pos=header.pos)
+            header.bind(size=self._update_header_rect, pos=self._update_header_rect)
+
+        logo = Image(source='images/netcarelogo.png', size_hint=(1, 1)) #logo size
+        header.add_widget(logo)
+
+        header_right = BoxLayout(orientation='horizontal', size_hint=(0.8, 1), spacing=10)
+        settings_btn = Button(text='Settings', size_hint=(0.1, 1), font_size=14)
+        settings_btn.bind(on_release=self.go_to_settings)
+        header_right.add_widget(settings_btn)
+
+        off_btn = Button(text='Off', size_hint=(0.1, 1), font_size=14)
+        off_btn.bind(on_release=self.stop_app)
+        header_right.add_widget(off_btn)
+
+        header.add_widget(header_right)
+        self.screen_manager = ScreenManager()
+        self.screen_manager.add_widget(SplashScreen(name='splash_screen'))
+        self.screen_manager.add_widget(PageOne(name='page_one'))
+        self.screen_manager.add_widget(PageTwo(name='page_two'))
+        self.screen_manager.add_widget(PageThree(name='page_three'))
+        self.screen_manager.add_widget(FormPage(name='page_four'))
+        self.screen_manager.add_widget(SettingsPage(name='settings_page'))
+
+        side_menu = BoxLayout(orientation='vertical', size_hint_x=0.2, padding=-2, spacing=-2)
+        side_menu_buttons = [
+            ('page_one', 'Robot'),
+            ('page_two', 'SOP'),
+            ('page_three', 'Config'),
+            ('page_four', 'Form'),
+        ]
+
+        for page, text in side_menu_buttons:
+            btn = Button(text=text, size_hint=(1, 0.2), on_release=lambda btn, page=page: self.switch_page(page))
+            side_menu.add_widget(btn)
+
+        main_layout = BoxLayout(orientation='horizontal', size_hint_y=0.9)
+        main_layout.add_widget(side_menu)
+        main_layout.add_widget(self.screen_manager)
+
+        self.add_widget(header)
+        self.add_widget(main_layout)
+
+    def _update_header_rect(self, instance, value):
+        self.header_rect.pos = instance.pos
+        self.header_rect.size = instance.size
+
+    def switch_page(self, page_name):
+        self.screen_manager.current = page_name
+
+    def go_to_settings(self, *args):
+        self.screen_manager.current = 'settings_page'
+
+    def stop_app(self, *args):
+        App.get_running_app().stop()
+
+class DashboardApp(App):
+    def build(self):
+        return Dashboard()
+
+if __name__ == '__main__':
+    DashboardApp().run
+import kivy
+from kivy.app import Appfrom kivy.uix.boxlayout import BoxLayout
+from kivy.uix.button import Button
+from kivy.uix.image import Image
+from kivy.uix.label import Label
+from kivy.uix.screenmanager import ScreenManager, Screen
+from kivy.graphics import Color, Rectangle
+from kivy.clock import Clock
+
+kivy.require('2.0.0')
+
+# Import pages from pages.py
+from pages import PageTwo, PageThree, FormPage, SettingsPage
+from pageOne import PageOne
+
+class SplashScreen(Screen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.add_widget(Image(source='images/netcarelogo.png', size_hint=(1, 1)))
+        self.splash_time = 5  # 10 minutes
+        Clock.schedule_interval(self.update_splash_screen, 1)
+
+    def update_splash_screen(self, dt):
+        self.splash_time -= 1
+        if self.splash_time <= 0:
+            Clock.unschedule(self.update_splash_screen)
+            self.manager.current = 'page_one'  # Switch to PageOne after splash
+
+class Dashboard(BoxLayout):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.orientation = 'vertical'
+
+        # Header layout with gold background
+        header = BoxLayout(orientation='horizontal', size_hint_y=0.1, padding=10, spacing=10)
+        with header.canvas.before:
+            Color(1, 0.84, 0, 1)  # Gold color
+            self.header_rect = Rectangle(size=header.size, pos=header.pos)
+            header.bind(size=self._update_header_rect, pos=self._update_header_rect)
+
+        logo = Image(source='images/netcarelogo.png', size_hint=(1, 1)) #logo size
+        header.add_widget(logo)
+
+        header_right = BoxLayout(orientation='horizontal', size_hint=(0.8, 1), spacing=10)
+        settings_btn = Button(text='Settings', size_hint=(0.1, 1), font_size=14)
+        settings_btn.bind(on_release=self.go_to_settings)
+        header_right.add_widget(settings_btn)
+
+        off_btn = Button(text='Off', size_hint=(0.1, 1), font_size=14)
+        off_btn.bind(on_release=self.stop_app)
+        header_right.add_widget(off_btn)
+
+        header.add_widget(header_right)
+        self.screen_manager = ScreenManager()
+        self.screen_manager.add_widget(SplashScreen(name='splash_screen'))
+        self.screen_manager.add_widget(PageOne(name='page_one'))
+        self.screen_manager.add_widget(PageTwo(name='page_two'))
+        self.screen_manager.add_widget(PageThree(name='page_three'))
+        self.screen_manager.add_widget(FormPage(name='page_four'))
+        self.screen_manager.add_widget(SettingsPage(name='settings_page'))
+
+        side_menu = BoxLayout(orientation='vertical', size_hint_x=0.2, padding=-2, spacing=-2)
+        side_menu_buttons = [
+            ('page_one', 'Robot'),
+            ('page_two', 'SOP'),
+            ('page_three', 'Config'),
+            ('page_four', 'Form'),
+        ]
+
+        for page, text in side_menu_buttons:
+            btn = Button(text=text, size_hint=(1, 0.2), on_release=lambda btn, page=page: self.switch_page(page))
+            side_menu.add_widget(btn)
+
+        main_layout = BoxLayout(orientation='horizontal', size_hint_y=0.9)
+        main_layout.add_widget(side_menu)
+        main_layout.add_widget(self.screen_manager)
+
+        self.add_widget(header)
+        self.add_widget(main_layout)
+
+    def _update_header_rect(self, instance, value):
+        self.header_rect.pos = instance.pos
+        self.header_rect.size = instance.size
+
+    def switch_page(self, page_name):
+        self.screen_manager.current = page_name
+
+    def go_to_settings(self, *args):
+        self.screen_manager.current = 'settings_page'
+
+    def stop_app(self, *args):
+        App.get_running_app().stop()
+
+class DashboardApp(App):
+    def build(self):
+        return Dashboard()
+
+if __name__ == '__main__':
+    DashboardApp().run()
