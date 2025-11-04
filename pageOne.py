@@ -85,6 +85,19 @@ class PageOne(Screen):
         self.strip.show()
 
 
+    # ---------------- Logging Helpers ----------------
+    def log_step(self, step_num, phase, msg):
+        """Structured step logging for cycle operations.
+        phase: 'WARMUP', 'CYCLE', 'MOTION', 'SUCCESS' etc."""
+        print(f"[CycleLog][{phase}][Step {step_num}] {msg}")
+
+    def log_error(self, step_num, phase, msg, exc=None):
+        details = f": {exc}" if exc else ""
+        print(f"[ERROR][CycleLog][{phase}][Step {step_num}] {msg}{details}")
+
+    def log_info(self, phase, msg):
+        print(f"[CycleLog][{phase}] {msg}")
+
 
     # def add_back_button(self, callback):
         # """Add a back button to the top left of the layout."""
@@ -804,6 +817,17 @@ class PageOne(Screen):
             self.strip.show()          
             print("RED LED is activated")
             
+    def cleanup_cycle(self):
+        """Clean up resources after cycle completion or interruption"""
+        try:
+            # Turn off relay
+            if hasattr(self, 'h'):
+                lgpio.gpio_write(self, 20, True)
+                lgpio.gpiochip_close(self.h)
+                print("Relay 20 deactivated in cleanup")
+        except Exception as e:
+            print(f"Error during cleanup: {e}")
+    
     def start_ten_minute_countdown(self):
         self.main_layout.clear_widgets()
         self.layoutback.clear_widgets()
@@ -821,6 +845,7 @@ class PageOne(Screen):
         self.motion_detection_enabled_at = time.time() + 60
         Clock.schedule_interval(self.update_ten_minute_countdown, 1)
         # Set all LEDs to red
+        self.log_step(1, 'WARMUP', 'Initializing cycle countdown and setting RED LEDs')
         self.strip.set_all_pixels(Color(255, 0, 0))
         self.strip.show()
         print("RED LED is activated after interval")
@@ -863,13 +888,26 @@ class PageOne(Screen):
         if self.countdown_time > 0:
                 # During warm-up, skip motion detection but continue countdown and baseline update
                 if hasattr(self, 'motion_detection_enabled_at') and time.time() < self.motion_detection_enabled_at:
-                    current_distance = sensor.distance * 100
-                    self.previous_distance = current_distance
+                    try:
+                        self.log_step(2, 'WARMUP', 'Reading sensor distance during warm-up')
+                        current_distance = sensor.distance * 100
+                        self.previous_distance = current_distance
+                    except Exception as e:
+                        self.log_error(2, 'WARMUP', 'Sensor read failed (using previous distance)', e)
+                        print(f"Sensor read error during warmup: {e}")
+                        current_distance = self.previous_distance
                     minutes, seconds = divmod(self.countdown_time, 60)
                     self.countdown_label.text = f"{minutes:02}:{seconds:02}"
                     self.countdown_time -= 1
                     return
-                current_distance = sensor.distance * 100
+                
+                try:
+                    self.log_step(3, 'CYCLE', 'Reading sensor distance')
+                    current_distance = sensor.distance * 100
+                except Exception as e:
+                    self.log_error(3, 'CYCLE', 'Sensor read failed (using previous distance)', e)
+                    print(f"Sensor read error: {e}")
+                    current_distance = self.previous_distance  # Use last known good value
                 print("current distance")
                 print(current_distance)
                 print(self.countdown_time)
@@ -879,6 +917,7 @@ class PageOne(Screen):
                 print(self.previous_distance - movement_threshold)
                 if  current_distance < self.previous_distance - movement_threshold or current_distance > self.previous_distance + movement_threshold:
                     print("in motion loop")
+                    self.log_step(4, 'MOTION', 'Motion threshold exceeded - entering motion handling branch')
                     
                     self.previous_distance = current_distance
                     minutes, seconds = divmod(self.countdown_time, 60)
@@ -899,9 +938,12 @@ class PageOne(Screen):
                     lgpio.gpiochip_close(self.h)
                     Clock.unschedule(self.update_ten_minute_countdown)
                     #motion_sensor.close()
-                    # Set all LEDs back to blue
+                    # Set all LEDs to blue after motion detection
+                    self.log_step(5, 'MOTION', 'Setting LEDs to BLUE for motion error state')
                     self.strip.set_all_pixels(Color(0, 0, 255))
                     self.strip.show()
+                    print("LEDs turned BLUE after motion detection")
+                    self.log_step(6, 'MOTION', 'Opening DB connection for failure record write')
                     mydb = mysql.connector.connect(
                     host="localhost",
                     user="root",
@@ -929,7 +971,9 @@ class PageOne(Screen):
                     
                     #mycursor.execute('insert into device_data (D_Number,Serial,Start_date,End_date, Diagnostic, Code,Operator_Id,Bed_Id) values (%s,%s,%s,%s,%s,%s,%s,%s)', ( 'CONCAT'(host_N, ' ', start_time),host_N, start_time, end_time, 'ok', reason,opID,shared.get_bedId() ))
                     print("Error Working")
+                    self.log_step(7, 'MOTION', 'Committing failure record to DB')
                     mydb.commit()
+                    self.log_step(8, 'MOTION', 'Closing DB resources')
                     mycursor.close()
                     mydb.close()
                     print("Error DB written")
@@ -958,29 +1002,52 @@ class PageOne(Screen):
                     #self.comp.bind(on_release=self.show_hospital_selection)
                     self.comp.bind(on_release=lambda instance: (self.stop_long_beeping(), self.show_hospital_selection(instance)))
                     #self.layout.add_widget(self.back_button1)
+                    self.log_step(9, 'MOTION', 'Starting long beeping alert thread')
                     self.start_long_beeping()
+                    return  # Exit after handling motion detection to prevent further execution
                 else:   
-                    print("in else")
+                    print("in else - no motion detected")
+                    self.log_step(4, 'CYCLE', 'No motion detected - updating baseline and continuing countdown')
+                    self.previous_distance = current_distance  # Update baseline for next check
                     minutes, seconds = divmod(self.countdown_time, 60)
                     self.countdown_label.text = f"{minutes:02}:{seconds:02}"
+                    print(f"Countdown: {minutes:02}:{seconds:02} ({self.countdown_time} seconds remaining)")
                     self.countdown_time -= 1
                     
         else:
+                # Countdown has reached 0 or below - cycle completed successfully
+                print("=" * 50)
+                print("CYCLE COMPLETED SUCCESSFULLY - COUNTDOWN REACHED 0")
+                print("=" * 50)
+                self.log_step(1, 'SUCCESS', 'Unscheduling countdown and marking completion')
                 Clock.unschedule(self.update_ten_minute_countdown)
+                
+                # CRITICAL: Turn LEDs green and update UI FIRST before database operations
+                self.log_step(2, 'SUCCESS', 'Setting LEDs to GREEN for success state')
+                self.strip.set_all_pixels(Color(0, 255, 0))  # Turn LEDs GREEN for success
+                self.strip.show()
+                print("LEDs turned GREEN after successful cycle")
+                
                 self.countdown_label.text = "SUCCESSFUL"
                 self.countdown_label.font_size = '50pt'
                 reason = "Success at end of 10 mins"
                 opID =shared.get_operatorId()
                 print(reason)
+                self.log_step(3, 'SUCCESS', 'Turning relay off')
                 lgpio.gpio_write(self.h, 20, True)  # Turn relay off
                 print("Relay 20 is deactivated")
                 lgpio.gpiochip_close(self.h)
+                
+                # Now do database operations (these might block)
+                print("Starting database write...")
+                self.log_step(4, 'SUCCESS', 'Opening DB connection')
                 mydb = mysql.connector.connect(
                     host='localhost',
                     user='root',
                     password="Robot123#",
                     database="robotdb"
                     )
+                self.log_step(5, 'SUCCESS', 'Creating cursor for success record insert')
                 mycursor = mydb.cursor()
                 end_time = time.localtime()
                 
@@ -998,10 +1065,16 @@ class PageOne(Screen):
                 mycursor.execute(sql, values)
                 #mycursor.execute('insert into device_data (D_Number,Serial,Start_date,End_date, Diagnostic, Code,Operator_Id,Bed_Id) values (%s,%s,%s,%s,%s,%s,%s,%s)', ( 'CONCAT'(host_N, '', start_time),host_N, start_time, end_time, 'ok', reason,opID,shared.get_bedId() ))
                 print("Success Working")
+                self.log_step(6, 'SUCCESS', 'Committing success record to DB')
                 mydb.commit()
+                self.log_step(7, 'SUCCESS', 'Closing DB resources')
                 mycursor.close()
                 mydb.close()
-                print("`Success` DB written")
+                print("`Success` DB written - database operations complete")
+                
+                # Start beeping before creating button
+                self.log_step(8, 'SUCCESS', 'Starting normal beeping thread')
+                self.start_beeping()
                 
                 #try:
                     # Execute the external script
@@ -1034,11 +1107,7 @@ class PageOne(Screen):
                 self.comp.bind(on_release=lambda instance: (self.stop_beeping(), self.show_hospital_selection(instance)))
                 #self.back_button.bind(on_release=self.go_to_begin_robot_page)
                 #self.add_widget(self.back_button)
-
-            # Set all LEDs back to red
-                self.strip.set_all_pixels(Color(0, 255, 0))
-                self.strip.show()
-                self.start_beeping()
+                self.log_step(9, 'SUCCESS', 'Added Done button to layout')
     def go_to_begin_robot_page(self, instance):
         self.layout.clear_widgets()
         self.create_main_content()
