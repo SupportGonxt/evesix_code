@@ -68,12 +68,12 @@ try:
         # Build bulk INSERT IGNORE to avoid per-row existence check.
         # Assumes D_Number is PRIMARY KEY or UNIQUE in cloud device_data.
         chunk_size = 500  # tune if needed
-        # Align column order with device_data schema used by PageOne inserts:
-        # (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side)
-        # Remove Insert_date to avoid schema mismatch if column absent.
+        # Align column order with device_data schema and include Insert_date timestamp.
+        # Final order with Insert_date last:
+        # (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side, Insert_date)
         insert_template_prefix = (
             "INSERT IGNORE INTO device_data "
-            "(D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side) VALUES "
+            "(D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side, Insert_date) VALUES "
         )
         actual_inserted = 0
         insert_total_start = time.time()
@@ -82,7 +82,8 @@ try:
             values_clause_parts = []
             params = []
             for r in batch:
-                values_clause_parts.append("(%s,%s,%s,%s,%s,%s,%s,%s,%s)")
+                # Insert_date uses NOW() server-side
+                values_clause_parts.append("(%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())")
                 params.extend([
                     r['D_Number'], r['Serial'], r['Start_date'], r['End_date'], r['Diagnostic'], r['Code'],
                     r['Operator_Id'], r['Bed_Id'], r['Side']
