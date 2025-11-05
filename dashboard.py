@@ -66,6 +66,20 @@ class Dashboard(BoxLayout):
 
         logo = Image(source='images/logo1.png', size_hint=(1, 1))  # Logo size
         header.add_widget(logo)
+        # Version label (top-left inside header)
+        try:
+            from version import VERSION as _DASH_VERSION
+        except Exception:
+            _DASH_VERSION = "v1.5"
+        ver_label = Label(text=f"[color=888888]{_DASH_VERSION}[/color]",
+                          markup=True,
+                          size_hint=(None, None),
+                          font_size='8sp',
+                          halign='left',
+                          valign='middle')
+        # Force texture update so width/height are correct
+        ver_label.bind(texture_size=lambda *_: None)
+        header.add_widget(ver_label)
 
         header_right = BoxLayout(orientation='horizontal', size_hint=(0.8, 1), spacing=1)
         
@@ -189,24 +203,6 @@ class Dashboard(BoxLayout):
 
         self.add_widget(header)
         self.add_widget(main_layout)
-        # --- Version label (small, subtle) ---
-        try:
-            ver_label = Label(text=f"[color=888888]{VERSION}[/color]",
-                               markup=True,
-                               size_hint=(None, None),
-                               font_size='8sp',  # tiny
-                               halign='left',
-                               valign='top',
-                               opacity=0.6)
-            # Place in top-left corner (above main content, below window edge)
-            def _place_version_label(*_):
-                ver_label.x = 4
-                ver_label.y = self.height - ver_label.texture_size[1] - 4
-            self.add_widget(ver_label)
-            Clock.schedule_once(_place_version_label, 0)
-            self.bind(size=lambda *_: _place_version_label())
-        except Exception as e:
-            print(f"Failed to add version label: {e}")
         
         
     def update_signal(self, dt):
