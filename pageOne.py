@@ -27,6 +27,7 @@ from threading import Thread
 from pin_manager import buzzer, sensor
 from kivy.uix.widget import Widget
 from kivy.uix.image import Image
+import sys
 
 
 
@@ -97,6 +98,51 @@ class PageOne(Screen):
 
     def log_info(self, phase, msg):
         print(f"[CycleLog][{phase}] {msg}")
+
+    # ---------------- Cloud Sync Trigger ----------------
+    def trigger_cloud_sync(self, phase='SUCCESS', start_step=11):
+        """Run cloudSync.py in a blocking subprocess (inside a background thread) with
+        an internet connectivity pre-check and post-check.
+        phase: logging phase label ('SUCCESS' or 'MOTION').
+        start_step: base step number for logging so each branch can have contiguous steps.
+        Steps used:
+          start_step     -> network pre-check
+          start_step + 1 -> launching cloudSync
+          start_step + 2 -> completion status
+        """
+
+        def _quick_net_check(host='8.8.8.8', port=53, timeout=2):
+            import socket
+            try:
+                sock = socket.create_connection((host, port), timeout=timeout)
+                sock.close()
+                return True
+            except OSError:
+                return False
+
+        start = time.time()
+        online = _quick_net_check()
+        if online:
+            self.log_step(start_step, phase, 'Internet check: ONLINE (proceeding with sync)')
+        else:
+            self.log_step(start_step, phase, 'Internet check: OFFLINE (cloudSync will internally wait)')
+        try:
+            self.log_step(start_step + 1, phase, 'Launching cloudSync.py for data upload')
+            result = subprocess.run([sys.executable, 'cloudSync.py'], capture_output=True, text=True)
+            duration = round(time.time() - start, 2)
+            # Post-run connectivity insight (may have come online during script)
+            online_after = _quick_net_check()
+            net_status_after = 'ONLINE' if online_after else 'OFFLINE'
+            if result.returncode == 0:
+                self.log_step(start_step + 2, phase, f'cloudSync.py completed in {duration}s (post-run net: {net_status_after})')
+                if result.stdout:
+                    print('[cloudSync stdout]\n' + result.stdout)
+                if result.stderr:
+                    print('[cloudSync stderr]\n' + result.stderr)
+            else:
+                self.log_error(start_step + 2, phase, f'cloudSync.py exited with code {result.returncode} (post-run net: {net_status_after})', result.stderr)
+        except Exception as e:
+            self.log_error(start_step + 2, phase, 'cloudSync invocation failed', e)
 
 
     # def add_back_button(self, callback):
@@ -1000,6 +1046,9 @@ class PageOne(Screen):
                     #self.layout.add_widget(self.back_button1)
                     self.log_step(9, 'MOTION', 'Starting long beeping alert thread')
                     self.start_long_beeping()
+                    # Trigger cloud sync on failure as well (to flush any pending queued rows)
+                    self.log_step(10, 'MOTION', 'Triggering asynchronous cloud sync after motion failure')
+                    Thread(target=lambda: self.trigger_cloud_sync(phase='MOTION', start_step=11), daemon=True).start()
                     return  # Exit after handling motion detection to prevent further execution
                 else:   
                     print("in else - no motion detected")
@@ -1104,6 +1153,9 @@ class PageOne(Screen):
                 #self.back_button.bind(on_release=self.go_to_begin_robot_page)
                 #self.add_widget(self.back_button)
                 self.log_step(9, 'SUCCESS', 'Added Done button to layout')
+                # Auto-trigger cloud sync asynchronously after successful cycle.
+                self.log_step(10, 'SUCCESS', 'Triggering asynchronous cloud sync (post-cycle)')
+                Thread(target=self.trigger_cloud_sync, daemon=True).start()
     def go_to_begin_robot_page(self, instance):
         self.layout.clear_widgets()
         self.create_main_content()
