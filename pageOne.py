@@ -841,8 +841,8 @@ class PageOne(Screen):
         print("timer")
         self.main_layout.add_widget(self.countdown_label)
         self.countdown_time = int(float(shared.get_time())) *60  # 10 minutes in seconds
-        # Warm-up window: ignore motion checks for the first 60 seconds of the 10-minute cycle
-        self.motion_detection_enabled_at = time.time() + 60
+        # Warm-up window: ignore motion checks for the first 30 seconds (was 60)
+        self.motion_detection_enabled_at = time.time() + 30
         Clock.schedule_interval(self.update_ten_minute_countdown, 1)
         # Set all LEDs to red
         self.log_step(1, 'WARMUP', 'Initializing cycle countdown and setting RED LEDs')
@@ -863,11 +863,7 @@ class PageOne(Screen):
         #initialize Sensor
         
 
-# Set all LEDs to GREEN
-        self.strip.set_all_pixels(Color(0, 255, 0))
-        self.strip.show()
-        # Schedule the relay to turn off after 10 minutes
- #       self.turn_off_relay
+    # (Removed stray early GREEN LED block; LEDs stay RED during warm-up.)
 
     
         

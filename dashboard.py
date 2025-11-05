@@ -191,18 +191,19 @@ class Dashboard(BoxLayout):
         self.add_widget(main_layout)
         # --- Version label (small, subtle) ---
         try:
-            ver_label = Label(text=f"[color=666666]{VERSION}[/color]",
+            ver_label = Label(text=f"[color=888888]{VERSION}[/color]",
                                markup=True,
                                size_hint=(None, None),
-                               font_size='12sp',
+                               font_size='8sp',  # smaller footprint
                                halign='right',
-                               valign='middle')
+                               valign='middle',
+                               opacity=0.6)
             # Position in bottom-right corner overlay
             # Use Clock to defer positioning until layout pass completes.
             def _place_version_label(*_):
                 # anchor to bottom-right of root boxlayout
-                ver_label.x = self.width - ver_label.texture_size[0] - 6
-                ver_label.y = 4
+                ver_label.x = self.width - ver_label.texture_size[0] - 3
+                ver_label.y = 2
             self.add_widget(ver_label)
             Clock.schedule_once(_place_version_label, 0)
             self.bind(size=lambda *_: _place_version_label())
