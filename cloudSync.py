@@ -68,20 +68,24 @@ try:
         # Build bulk INSERT IGNORE to avoid per-row existence check.
         # Assumes D_Number is PRIMARY KEY or UNIQUE in cloud device_data.
         chunk_size = 500  # tune if needed
+        # Align column order with device_data schema used by PageOne inserts:
+        # (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side)
+        # Remove Insert_date to avoid schema mismatch if column absent.
         insert_template_prefix = (
             "INSERT IGNORE INTO device_data "
-            "(D_Number, Start_date, End_date, Diagnostic, Code, Serial, Operator_Id, Bed_Id, Side, Insert_date) VALUES "
+            "(D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side) VALUES "
         )
+        actual_inserted = 0
         insert_total_start = time.time()
         for i in range(0, total_rows, chunk_size):
             batch = rows[i:i+chunk_size]
             values_clause_parts = []
             params = []
             for r in batch:
-                values_clause_parts.append("(%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())")
+                values_clause_parts.append("(%s,%s,%s,%s,%s,%s,%s,%s,%s)")
                 params.extend([
-                    r['D_Number'], r['Start_date'], r['End_date'], r['Diagnostic'], r['Code'],
-                    r['Serial'], r['Operator_Id'], r['Bed_Id'], r['Side']
+                    r['D_Number'], r['Serial'], r['Start_date'], r['End_date'], r['Diagnostic'], r['Code'],
+                    r['Operator_Id'], r['Bed_Id'], r['Side']
                 ])
             insert_sql = insert_template_prefix + ",".join(values_clause_parts)
             try:
@@ -89,12 +93,31 @@ try:
             except mysql.connector.Error as e:
                 print(f"Bulk insert error (rows {i}-{i+len(batch)-1}): {e}")
             else:
-                print(f"Inserted/ignored batch {i//chunk_size+1} containing {len(batch)} rows.")
+                batch_inserted = master_cursor.rowcount  # rows actually inserted (ignored duplicates not counted)
+                actual_inserted += batch_inserted
+                print(f"Batch {i//chunk_size+1}: attempted={len(batch)} inserted={batch_inserted} ignored={len(batch)-batch_inserted}")
         insert_elapsed = time.time() - insert_total_start
 
-        # Estimate missing_count as number of rows attempted (IGNORE hides duplicates)
-        missing_count = total_rows
-        print(f"Bulk insert phase complete in {round(insert_elapsed,3)}s (approx {round(total_rows/max(insert_elapsed,0.001))} rows/sec).")
+        missing_count = actual_inserted
+        print(f"Bulk insert phase complete in {round(insert_elapsed,3)}s. total_attempted={total_rows} total_inserted={actual_inserted} total_ignored={total_rows-actual_inserted}")
+
+        # Sample verification: check existence of up to 3 representative D_Number keys
+        sample_keys = []
+        if total_rows:
+            sample_keys.append(rows[0]['D_Number'])
+            if total_rows > 1:
+                sample_keys.append(rows[-1]['D_Number'])
+            if total_rows > 2:
+                sample_keys.append(rows[total_rows//2]['D_Number'])
+        if sample_keys:
+            placeholders = ",".join(["%s"] * len(sample_keys))
+            try:
+                master_cursor.execute(f"SELECT D_Number FROM device_data WHERE D_Number IN ({placeholders})", sample_keys)
+                present = {r[0] for r in master_cursor.fetchall()}
+                missing_samples = [k for k in sample_keys if k not in present]
+                print(f"Sample verification: present={len(present)} missing={len(missing_samples)} -> missing_keys={missing_samples}")
+            except mysql.connector.Error as e:
+                print(f"Sample verification query error: {e}")
 
         # Single update: mark all unsynced rows as synced now.
         try:
@@ -129,7 +152,7 @@ try:
     commit_elapsed = time.time() - commit_start
     total_elapsed = time.time() - _net_start  # includes network wait
     print(f"Commits complete in {round(commit_elapsed,3)}s.")
-    print(f"SUMMARY: rows={total_rows} inserted_or_ignored={missing_count} total_duration={round(total_elapsed,3)}s (net_wait_included).")
+    print(f"SUMMARY: attempted={total_rows} inserted={missing_count} ignored={total_rows-missing_count} total_duration={round(total_elapsed,3)}s (net_wait_included)")
 
 except mysql.connector.Error as db_err:
     print(f"Database connection or query error: {db_err}")
