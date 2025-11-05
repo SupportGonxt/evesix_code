@@ -1027,6 +1027,19 @@ class PageOne(Screen):
                     print("Error Working")
                     self.log_step(7, 'MOTION', 'Committing failure record to DB')
                     mydb.commit()
+                    # Immediately queue this failure record into data_q so cloud sync sees it.
+                    try:
+                        self.log_step('7.1', 'MOTION', 'Queueing failure record into data_q')
+                        q_cursor = mydb.cursor()
+                        q_sql = ("INSERT IGNORE INTO data_q (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side, Update_status, Insert_date) "
+                                 "VALUES (CONCAT(%s,' ',%s), %s, %s, %s, %s, %s, %s, %s, %s, 'no', NOW())")
+                        q_values = (host_N, end_time, host_N, self.start_time, end_time, 'failed', reason, opID, shared.get_bedId(), self.side_selected)
+                        q_cursor.execute(q_sql, q_values)
+                        mydb.commit()
+                        self.log_step('7.2', 'MOTION', f'data_q queued (rowcount={q_cursor.rowcount})')
+                        q_cursor.close()
+                    except Exception as e:
+                        self.log_error('7.2', 'MOTION', 'Failed to queue failure record into data_q', e)
                     self.log_step(8, 'MOTION', 'Closing DB resources')
                     mycursor.close()
                     mydb.close()
@@ -1124,6 +1137,19 @@ class PageOne(Screen):
                 print("Success Working")
                 self.log_step(6, 'SUCCESS', 'Committing success record to DB')
                 mydb.commit()
+                # Immediately queue this success record into data_q so cloud sync sees it in same run.
+                try:
+                    self.log_step('6.1', 'SUCCESS', 'Queueing success record into data_q')
+                    q_cursor = mydb.cursor()
+                    q_sql = ("INSERT IGNORE INTO data_q (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side, Update_status, Insert_date) "
+                             "VALUES (CONCAT(%s,' ',%s), %s, %s, %s, %s, %s, %s, %s, %s, 'no', NOW())")
+                    q_values = (host_N, end_time, host_N, self.start_time, end_time, 'ok', reason, opID, shared.get_bedId(), self.side_selected)
+                    q_cursor.execute(q_sql, q_values)
+                    mydb.commit()
+                    self.log_step('6.2', 'SUCCESS', f'data_q queued (rowcount={q_cursor.rowcount})')
+                    q_cursor.close()
+                except Exception as e:
+                    self.log_error('6.2', 'SUCCESS', 'Failed to queue success record into data_q', e)
                 self.log_step(7, 'SUCCESS', 'Closing DB resources')
                 mycursor.close()
                 mydb.close()
