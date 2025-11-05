@@ -194,16 +194,14 @@ class Dashboard(BoxLayout):
             ver_label = Label(text=f"[color=888888]{VERSION}[/color]",
                                markup=True,
                                size_hint=(None, None),
-                               font_size='8sp',  # smaller footprint
-                               halign='right',
-                               valign='middle',
+                               font_size='8sp',  # tiny
+                               halign='left',
+                               valign='top',
                                opacity=0.6)
-            # Position in bottom-right corner overlay
-            # Use Clock to defer positioning until layout pass completes.
+            # Place in top-left corner (above main content, below window edge)
             def _place_version_label(*_):
-                # anchor to bottom-right of root boxlayout
-                ver_label.x = self.width - ver_label.texture_size[0] - 3
-                ver_label.y = 2
+                ver_label.x = 4
+                ver_label.y = self.height - ver_label.texture_size[1] - 4
             self.add_widget(ver_label)
             Clock.schedule_once(_place_version_label, 0)
             self.bind(size=lambda *_: _place_version_label())
