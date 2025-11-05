@@ -28,6 +28,7 @@ from pin_manager import buzzer, sensor
 from kivy.uix.widget import Widget
 from kivy.uix.image import Image
 import sys
+import os
 
 
 
@@ -84,6 +85,9 @@ class PageOne(Screen):
 
         self.strip.set_all_pixels(Color(0, 255, 0))
         self.strip.show()
+        # Hardcoded absolute path for cloud sync script (robot deployment environment).
+        # Adjust if the directory changes on the target device.
+        self.CLOUD_SYNC_PATH = '/home/gonxt/evesix_code/cloudSync.py'
 
 
     # ---------------- Logging Helpers ----------------
@@ -121,14 +125,22 @@ class PageOne(Screen):
                 return False
 
         start = time.time()
+        # Resolve absolute path to cloudSync.py in case working directory differs under systemd/cron.
+        script_path = self.CLOUD_SYNC_PATH
+        if not os.path.isfile(script_path):
+            self.log_error(start_step, phase, f'Hardcoded cloudSync.py missing at {script_path}')
+            return
+        self.log_step(start_step, phase, f'Using hardcoded cloudSync path: {script_path}')
         online = _quick_net_check()
+        # Adjust subsequent steps because we used start_step for path resolution logging
+        net_step = start_step + 0.1  # fractional to keep ordering visible
         if online:
-            self.log_step(start_step, phase, 'Internet check: ONLINE (proceeding with sync)')
+            self.log_step(f'{net_step}', phase, 'Internet check: ONLINE (proceeding with sync)')
         else:
-            self.log_step(start_step, phase, 'Internet check: OFFLINE (cloudSync will internally wait)')
+            self.log_step(f'{net_step}', phase, 'Internet check: OFFLINE (cloudSync will internally wait)')
         try:
-            self.log_step(start_step + 1, phase, 'Launching cloudSync.py for data upload')
-            result = subprocess.run([sys.executable, 'cloudSync.py'], capture_output=True, text=True)
+            self.log_step(start_step + 1, phase, f'Launching cloudSync.py for data upload (path={script_path})')
+            result = subprocess.run([sys.executable, script_path], capture_output=True, text=True)
             duration = round(time.time() - start, 2)
             # Post-run connectivity insight (may have come online during script)
             online_after = _quick_net_check()
