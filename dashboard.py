@@ -21,6 +21,11 @@ from pages import PageTwo, PageThree, FormPage
 from pageOne import PageOne
 from loginScreen import LoginScreen
 from diagnose import Diagnose
+import os
+try:
+    from version import VERSION
+except Exception:
+    VERSION = "v1.5"  # fallback if version module missing
 
 class SplashScreen(Screen):
     def __init__(self, **kwargs):
@@ -40,6 +45,11 @@ class Dashboard(BoxLayout):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.orientation = 'vertical'
+        # Verify image assets early
+        self._verify_images([
+            'logo1.png',
+            'signal_0.png','signal_1.png','signal_2.png','signal_3.png','signal_4.png'
+        ])
 
         # Set the main background to white
         with self.canvas.before:
@@ -179,6 +189,25 @@ class Dashboard(BoxLayout):
 
         self.add_widget(header)
         self.add_widget(main_layout)
+        # --- Version label (small, subtle) ---
+        try:
+            ver_label = Label(text=f"[color=666666]{VERSION}[/color]",
+                               markup=True,
+                               size_hint=(None, None),
+                               font_size='12sp',
+                               halign='right',
+                               valign='middle')
+            # Position in bottom-right corner overlay
+            # Use Clock to defer positioning until layout pass completes.
+            def _place_version_label(*_):
+                # anchor to bottom-right of root boxlayout
+                ver_label.x = self.width - ver_label.texture_size[0] - 6
+                ver_label.y = 4
+            self.add_widget(ver_label)
+            Clock.schedule_once(_place_version_label, 0)
+            self.bind(size=lambda *_: _place_version_label())
+        except Exception as e:
+            print(f"Failed to add version label: {e}")
         
         
     def update_signal(self, dt):
@@ -229,6 +258,14 @@ class Dashboard(BoxLayout):
 
     def stop_app(self, *args):
         App.get_running_app().stop()
+
+    def _verify_images(self, filenames):
+        base = os.path.join(os.path.dirname(__file__), 'images')
+        missing = [f for f in filenames if not os.path.exists(os.path.join(base, f))]
+        if missing:
+            print(f"[IMAGE WARNING] Missing image files: {', '.join(missing)} in 'images/' directory.")
+            print(f"Ensure directory exists: {base}")
+            print("Widgets using these images will appear blank.")
 
 
 

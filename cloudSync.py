@@ -3,6 +3,7 @@ import time
 import socket
 import sys
 import platform
+from datetime import datetime
 
 def check_internet(host="8.8.8.8", port=53, timeout=3):
     try:
@@ -13,11 +14,15 @@ def check_internet(host="8.8.8.8", port=53, timeout=3):
         return False
 
 # Internet check loop
-print("Checking for internet connection...")
+print("Checking for internet connection (fast backoff)...")
+_net_start = time.time()
+_attempts = 0
 while not check_internet():
-    print("No internet connection. Retrying in 10 seconds...")
-    time.sleep(10)
-print("Internet connection established.")
+    _attempts += 1
+    wait = min(10, 1 + _attempts)  # gradual backoff up to 10s max
+    print(f"No internet connection. Attempt {_attempts}. Retrying in {wait}s...")
+    time.sleep(wait)
+print(f"Internet connection established after {_attempts} attempts in {round(time.time()-_net_start,2)}s.")
 
 local_conn = master_conn = None
 local_cursor = update_cursor = master_cursor = None
@@ -48,107 +53,83 @@ try:
     update_cursor = local_conn.cursor()
     master_cursor = master_conn.cursor()
 
-    print("Fetching data from local data_q table where Update_status = 'no'...")
-    local_cursor.execute("SELECT * FROM data_q WHERE Update_status = 'no'")
+    print("Fetching unsynced rows from local data_q (Update_status='no') ...")
+    fetch_start = time.time()
+    local_cursor.execute("SELECT D_Number, Start_date, End_date, Diagnostic, Code, Serial, Operator_Id, Bed_Id, Side FROM data_q WHERE Update_status = 'no'")
     rows = local_cursor.fetchall()
-    print(f"Fetched {len(rows)} rows.")
+    fetch_elapsed = time.time() - fetch_start
+    total_rows = len(rows)
+    print(f"Fetched {total_rows} unsynced rows in {round(fetch_elapsed,3)}s.")
 
-    for index, row in enumerate(rows, start=1):
-        print(f"\nProcessing row {index} with D_Number: {row['D_Number']}")
-        if index == 1:
-            start_record = row['D_Number']# First record
+    if total_rows:
+        start_record = rows[0]['D_Number']
+        end_record = rows[-1]['D_Number']
 
-        end_record = row['D_Number']  # Will overwrite on each iteration—ends with the last one
-
-
-        try:
-            master_cursor.execute(
-                "SELECT 1 FROM device_data WHERE D_Number = %s",
-                (row['D_Number'],)
-            )
-            exists = master_cursor.fetchone()
-
-            if not exists:
-                print(f"D_Number {row['D_Number']} not found in cloud. Inserting...")
-                insert_query = """
-                    INSERT INTO device_data (
-                        D_Number, Start_date, End_date, Diagnostic, Code, Serial,
-                        Operator_Id, Bed_Id, Side, Insert_date
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,NOW())
-                """
-                master_cursor.execute(insert_query, (
-                    row['D_Number'], row['Start_date'], row['End_date'],
-                    row['Diagnostic'], row['Code'], row['Serial'],
-                    row['Operator_Id'], row['Bed_Id'], row['Side']
-                ))
-                missing_count += 1  # Increment count
-                print(f"Inserted D_Number {row['D_Number']} into cloud.")
-            else:
-                print(f"D_Number {row['D_Number']} already exists in cloud. Skipping insert.")
-
-            update_cursor.execute(
-                "UPDATE data_q SET Update_status = 'yes' WHERE D_Number = %s",
-                (row['D_Number'],)
-            )
-            print(f"Updated local Update_status to 'yes' for D_Number {row['D_Number']}.")
-
-        except mysql.connector.Error as e:
-            print(f"Error processing row {row['D_Number']}: {e}")
-            
-    
-
-    end_time = time.localtime()     
-    sync_insert_query = """
-        INSERT INTO sync_log (
-            Sync_log_Id, Operation_type, Start_date, End_date, Number_Of_Records, Start_record,
-            End_record, Output
-        ) VALUES (CONCAT(%s, ' ', %s), %s, %s, %s, %s, %s, %s, %s)
-    """
-    values = (platform.node(), end_time,'Data Upload', start_time, end_time, missing_count,start_record, end_record,'Upload Complete')
-    master_cursor.execute(sync_insert_query, values)
-    print(f"Also inserted  {missing_count} rows into sync_log table.")        
-
-    print("Fetching data from local data_q table where Update_status = 'no'...")
-    local_cursor.execute("SELECT * FROM sync_log")
-    rows = local_cursor.fetchall()
-    print(f"Fetched {len(rows)} rows.")
-    
-    
-    if missing_count > 0:
-        for index, row in enumerate(rows, start=1):
-            print(f"\nProcessing row {index} with Sync_log_Id: {row['Sync_log_Id']}")
-        
+        # Build bulk INSERT IGNORE to avoid per-row existence check.
+        # Assumes D_Number is PRIMARY KEY or UNIQUE in cloud device_data.
+        chunk_size = 500  # tune if needed
+        insert_template_prefix = (
+            "INSERT IGNORE INTO device_data "
+            "(D_Number, Start_date, End_date, Diagnostic, Code, Serial, Operator_Id, Bed_Id, Side, Insert_date) VALUES "
+        )
+        insert_total_start = time.time()
+        for i in range(0, total_rows, chunk_size):
+            batch = rows[i:i+chunk_size]
+            values_clause_parts = []
+            params = []
+            for r in batch:
+                values_clause_parts.append("(%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())")
+                params.extend([
+                    r['D_Number'], r['Start_date'], r['End_date'], r['Diagnostic'], r['Code'],
+                    r['Serial'], r['Operator_Id'], r['Bed_Id'], r['Side']
+                ])
+            insert_sql = insert_template_prefix + ",".join(values_clause_parts)
             try:
-                master_cursor.execute(
-                    "SELECT 1 FROM sync_log WHERE Sync_log_Id = %s",
-                    (row['Sync_log_Id'],)
-                )
-                exists = master_cursor.fetchone()
-
-                if not exists:
-                    print(f"Sync_log_Id {row['Sync_log_Id']} not found in cloud. Inserting...")
-                    insert_query = """
-                        INSERT INTO sync_log (
-                            Sync_log_Id, Operation_type, Start_date, End_date, Number_Of_Records, Start_record, End_record, Output
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    """
-                    master_cursor.execute(insert_query, (
-                        row['Sync_log_Id'], row['Operation_type'], row['Start_date'],
-                        row['End_date'], row['Number_Of_Records'], row['Start_record'],
-                        row['End_record'], row['Output']
-                    ))
-                
-                    print(f"Inserted Sync_log_Id {row['Sync_log_Id']} into cloud.")
-                else:
-                    print(f"Sync_log_Id {row['Sync_log_Id']} already exists in cloud. Skipping insert.")
-
-           
+                master_cursor.execute(insert_sql, params)
             except mysql.connector.Error as e:
-                print(f"Error processing row {row['Sync_log_Id']}: {e}")
+                print(f"Bulk insert error (rows {i}-{i+len(batch)-1}): {e}")
+            else:
+                print(f"Inserted/ignored batch {i//chunk_size+1} containing {len(batch)} rows.")
+        insert_elapsed = time.time() - insert_total_start
+
+        # Estimate missing_count as number of rows attempted (IGNORE hides duplicates)
+        missing_count = total_rows
+        print(f"Bulk insert phase complete in {round(insert_elapsed,3)}s (approx {round(total_rows/max(insert_elapsed,0.001))} rows/sec).")
+
+        # Single update: mark all unsynced rows as synced now.
+        try:
+            update_cursor.execute("UPDATE data_q SET Update_status='yes' WHERE Update_status='no'")
+            print("Marked all previously unsynced local rows as 'yes'.")
+        except mysql.connector.Error as e:
+            print(f"Failed to update local statuses: {e}")
+    else:
+        print("No unsynced rows found; skipping bulk insert and update.")
+
+    end_time = time.localtime()    
+    # Insert just this run's sync log entry with INSERT IGNORE (avoid second table sweep)
+    sync_id_end = end_time  # used for ID construction
+    sync_insert = (
+        "INSERT IGNORE INTO sync_log "
+        "(Sync_log_Id, Operation_type, Start_date, End_date, Number_Of_Records, Start_record, End_record, Output) "
+        "VALUES (CONCAT(%s,' ',%s), %s, %s, %s, %s, %s, %s, %s)"
+    )
+    sync_values = (
+        platform.node(), sync_id_end, 'Data Upload', start_time, end_time,
+        missing_count, start_record, end_record, 'Upload Complete'
+    )
+    try:
+        master_cursor.execute(sync_insert, sync_values)
+        print("Sync log entry inserted (or already existed).")
+    except mysql.connector.Error as e:
+        print(f"Failed to insert sync log entry: {e}")
     print("Committing changes to local and cloud databases...")
+    commit_start = time.time()
     local_conn.commit()
     master_conn.commit()
-    print("Commits complete.")
+    commit_elapsed = time.time() - commit_start
+    total_elapsed = time.time() - _net_start  # includes network wait
+    print(f"Commits complete in {round(commit_elapsed,3)}s.")
+    print(f"SUMMARY: rows={total_rows} inserted_or_ignored={missing_count} total_duration={round(total_elapsed,3)}s (net_wait_included).")
 
 except mysql.connector.Error as db_err:
     print(f"Database connection or query error: {db_err}")
