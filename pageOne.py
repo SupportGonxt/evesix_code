@@ -899,8 +899,8 @@ class PageOne(Screen):
         print("timer")
         self.main_layout.add_widget(self.countdown_label)
         self.countdown_time = int(float(shared.get_time())) *60  # 10 minutes in seconds
-        # Warm-up window: ignore motion checks for the first 30 seconds (was 60)
-        self.motion_detection_enabled_at = time.time() + 30
+        # Warm-up window: ignore motion checks for the first 15 seconds (was 30, previously 60)
+        self.motion_detection_enabled_at = time.time() + 15
         Clock.schedule_interval(self.update_ten_minute_countdown, 1)
         # Set all LEDs to red
         self.log_step(1, 'WARMUP', 'Initializing cycle countdown and setting RED LEDs')
