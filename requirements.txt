@@ -1,0 +1,8 @@
+kivy
+mysql-connector-python
+PyMySQL
+gpiozero
+rpi5-ws2812
+lgpio
+psutil
+requests
