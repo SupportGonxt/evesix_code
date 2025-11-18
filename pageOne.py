@@ -162,6 +162,10 @@ class PageOne(Screen):
         
         connection.close()
         
+        # Remove old bed_button if it exists to prevent duplicate widgets
+        if hasattr(self, 'bed_button') and self.bed_button in self.layout.children:
+            self.layout.remove_widget(self.bed_button)
+        
         self.bed_button = Button(
             text='Select a bed',
             size_hint=(0.70, 0.15),
@@ -170,14 +174,12 @@ class PageOne(Screen):
             pos_hint={"x": 0.15, "y": 0.3}
         )
         self.bed_button.bind(on_release=dropdown1.open)
-        dropdown1.bind(on_select=lambda instance, x: setattr(self.bed_button, 'text', x))
         
+        # Single binding for dropdown selection
         def on_select(instance, value):
             self.bed_button.text = value 
             self.handle_bed_selection(instance) 
-        # Bind the selection handler to the dropdown 
         dropdown1.bind(on_select=on_select)
-        
         
         self.layout.add_widget(self.bed_button)
         
@@ -321,6 +323,8 @@ class PageOne(Screen):
         self.main_layout.clear_widgets()
         self.layoutback.clear_widgets()
         self.layout.clear_widgets()
+        self.layoutHead.clear_widgets()  # Clear header layout to remove old labels
+        self.laytext.clear_widgets()      # Clear text layout to remove old validation labels
 
         self.textValid = Label(
             text=' ',
@@ -427,6 +431,10 @@ class PageOne(Screen):
             btn.bind(on_release=lambda btn: dropdown.select(btn.text))
             dropdown.add_widget(btn)
 
+        # Remove old hospital_button if it exists to prevent duplicate widgets
+        if hasattr(self, 'hospital_button') and self.hospital_button in self.layout.children:
+            self.layout.remove_widget(self.hospital_button)
+        
         self.hospital_button = Button(
             text='Select a ward',
             size_hint=(0.70, 0.15),
@@ -435,12 +443,11 @@ class PageOne(Screen):
             pos_hint = {"x":0.15,"y":0.5}
         )
         self.hospital_button.bind(on_release=dropdown.open)
-        dropdown.bind(on_select=lambda instance, x: setattr(self.hospital_button, 'text', x))
 
+        # Single binding for dropdown selection
         def on_select(instance, value):
             self.hospital_button.text = value 
             self.handle_selection(instance, value) 
-        # Bind the selection handler to the dropdown 
         dropdown.bind(on_select=on_select)
 
         self.layout.add_widget(self.hospital_button)
