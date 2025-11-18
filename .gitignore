@@ -22,7 +22,7 @@ wheels/
 
 # Virtual Environment
 foobar/
-shatyenv/
+
 venv/
 ENV/
 
