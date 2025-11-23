@@ -27,6 +27,8 @@ from threading import Thread
 from pin_manager import buzzer, sensor
 from kivy.uix.widget import Widget
 from kivy.uix.image import Image
+import sys
+import os
 
 
 
@@ -83,7 +85,76 @@ class PageOne(Screen):
 
         self.strip.set_all_pixels(Color(0, 255, 0))
         self.strip.show()
+        # Hardcoded absolute path for cloud sync script (robot deployment environment).
+        # Adjust if the directory changes on the target device.
+        self.CLOUD_SYNC_PATH = '/home/gonxt/evesix_code/cloudSync.py'
 
+
+    # ---------------- Logging Helpers ----------------
+    def log_step(self, step_num, phase, msg):
+        """Structured step logging for cycle operations.
+        phase: 'WARMUP', 'CYCLE', 'MOTION', 'SUCCESS' etc."""
+        print(f"[CycleLog][{phase}][Step {step_num}] {msg}")
+
+    def log_error(self, step_num, phase, msg, exc=None):
+        details = f": {exc}" if exc else ""
+        print(f"[ERROR][CycleLog][{phase}][Step {step_num}] {msg}{details}")
+
+    def log_info(self, phase, msg):
+        print(f"[CycleLog][{phase}] {msg}")
+
+    # ---------------- Cloud Sync Trigger ----------------
+    def trigger_cloud_sync(self, phase='SUCCESS', start_step=11):
+        """Run cloudSync.py in a blocking subprocess (inside a background thread) with
+        an internet connectivity pre-check and post-check.
+        phase: logging phase label ('SUCCESS' or 'MOTION').
+        start_step: base step number for logging so each branch can have contiguous steps.
+        Steps used:
+          start_step     -> network pre-check
+          start_step + 1 -> launching cloudSync
+          start_step + 2 -> completion status
+        """
+
+        def _quick_net_check(host='8.8.8.8', port=53, timeout=2):
+            import socket
+            try:
+                sock = socket.create_connection((host, port), timeout=timeout)
+                sock.close()
+                return True
+            except OSError:
+                return False
+
+        start = time.time()
+        # Resolve absolute path to cloudSync.py in case working directory differs under systemd/cron.
+        script_path = self.CLOUD_SYNC_PATH
+        if not os.path.isfile(script_path):
+            self.log_error(start_step, phase, f'Hardcoded cloudSync.py missing at {script_path}')
+            return
+        self.log_step(start_step, phase, f'Using hardcoded cloudSync path: {script_path}')
+        online = _quick_net_check()
+        # Adjust subsequent steps because we used start_step for path resolution logging
+        net_step = start_step + 0.1  # fractional to keep ordering visible
+        if online:
+            self.log_step(f'{net_step}', phase, 'Internet check: ONLINE (proceeding with sync)')
+        else:
+            self.log_step(f'{net_step}', phase, 'Internet check: OFFLINE (cloudSync will internally wait)')
+        try:
+            self.log_step(start_step + 1, phase, f'Launching cloudSync.py for data upload (path={script_path})')
+            result = subprocess.run([sys.executable, script_path], capture_output=True, text=True)
+            duration = round(time.time() - start, 2)
+            # Post-run connectivity insight (may have come online during script)
+            online_after = _quick_net_check()
+            net_status_after = 'ONLINE' if online_after else 'OFFLINE'
+            if result.returncode == 0:
+                self.log_step(start_step + 2, phase, f'cloudSync.py completed in {duration}s (post-run net: {net_status_after})')
+                if result.stdout:
+                    print('[cloudSync stdout]\n' + result.stdout)
+                if result.stderr:
+                    print('[cloudSync stderr]\n' + result.stderr)
+            else:
+                self.log_error(start_step + 2, phase, f'cloudSync.py exited with code {result.returncode} (post-run net: {net_status_after})', result.stderr)
+        except Exception as e:
+            self.log_error(start_step + 2, phase, 'cloudSync invocation failed', e)
 
 
     # def add_back_button(self, callback):
@@ -811,6 +882,17 @@ class PageOne(Screen):
             self.strip.show()          
             print("RED LED is activated")
             
+    def cleanup_cycle(self):
+        """Clean up resources after cycle completion or interruption"""
+        try:
+            # Turn off relay
+            if hasattr(self, 'h'):
+                lgpio.gpio_write(self, 20, True)
+                lgpio.gpiochip_close(self.h)
+                print("Relay 20 deactivated in cleanup")
+        except Exception as e:
+            print(f"Error during cleanup: {e}")
+    
     def start_ten_minute_countdown(self):
         self.main_layout.clear_widgets()
         self.layoutback.clear_widgets()
@@ -824,10 +906,11 @@ class PageOne(Screen):
         print("timer")
         self.main_layout.add_widget(self.countdown_label)
         self.countdown_time = int(float(shared.get_time())) *60  # 10 minutes in seconds
-        # Warm-up window: ignore motion checks for the first 60 seconds of the 10-minute cycle
-        self.motion_detection_enabled_at = time.time() + 60
+        # Warm-up window: ignore motion checks for the first 15 seconds (was 30, previously 60)
+        self.motion_detection_enabled_at = time.time() + 15
         Clock.schedule_interval(self.update_ten_minute_countdown, 1)
         # Set all LEDs to red
+        self.log_step(1, 'WARMUP', 'Initializing cycle countdown and setting RED LEDs')
         self.strip.set_all_pixels(Color(255, 0, 0))
         self.strip.show()
         print("RED LED is activated after interval")
@@ -845,11 +928,7 @@ class PageOne(Screen):
         #initialize Sensor
         
 
-# Set all LEDs to GREEN
-        self.strip.set_all_pixels(Color(0, 255, 0))
-        self.strip.show()
-        # Schedule the relay to turn off after 10 minutes
- #       self.turn_off_relay
+    # (Removed stray early GREEN LED block; LEDs stay RED during warm-up.)
 
     
         
@@ -870,13 +949,26 @@ class PageOne(Screen):
         if self.countdown_time > 0:
                 # During warm-up, skip motion detection but continue countdown and baseline update
                 if hasattr(self, 'motion_detection_enabled_at') and time.time() < self.motion_detection_enabled_at:
-                    current_distance = sensor.distance * 100
-                    self.previous_distance = current_distance
+                    try:
+                        self.log_step(2, 'WARMUP', 'Reading sensor distance during warm-up')
+                        current_distance = sensor.distance * 100
+                        self.previous_distance = current_distance
+                    except Exception as e:
+                        self.log_error(2, 'WARMUP', 'Sensor read failed (using previous distance)', e)
+                        print(f"Sensor read error during warmup: {e}")
+                        current_distance = self.previous_distance
                     minutes, seconds = divmod(self.countdown_time, 60)
                     self.countdown_label.text = f"{minutes:02}:{seconds:02}"
                     self.countdown_time -= 1
                     return
-                current_distance = sensor.distance * 100
+                
+                try:
+                    self.log_step(3, 'CYCLE', 'Reading sensor distance')
+                    current_distance = sensor.distance * 100
+                except Exception as e:
+                    self.log_error(3, 'CYCLE', 'Sensor read failed (using previous distance)', e)
+                    print(f"Sensor read error: {e}")
+                    current_distance = self.previous_distance  # Use last known good value
                 print("current distance")
                 print(current_distance)
                 print(self.countdown_time)
@@ -886,6 +978,7 @@ class PageOne(Screen):
                 print(self.previous_distance - movement_threshold)
                 if  current_distance < self.previous_distance - movement_threshold or current_distance > self.previous_distance + movement_threshold:
                     print("in motion loop")
+                    self.log_step(4, 'MOTION', 'Motion threshold exceeded - entering motion handling branch')
                     
                     self.previous_distance = current_distance
                     minutes, seconds = divmod(self.countdown_time, 60)
@@ -906,9 +999,12 @@ class PageOne(Screen):
                     lgpio.gpiochip_close(self.h)
                     Clock.unschedule(self.update_ten_minute_countdown)
                     #motion_sensor.close()
-                    # Set all LEDs back to blue
+                    # Set all LEDs to blue after motion detection
+                    self.log_step(5, 'MOTION', 'Setting LEDs to BLUE for motion error state')
                     self.strip.set_all_pixels(Color(0, 0, 255))
                     self.strip.show()
+                    print("LEDs turned BLUE after motion detection")
+                    self.log_step(6, 'MOTION', 'Opening DB connection for failure record write')
                     mydb = mysql.connector.connect(
                     host="localhost",
                     user="root",
@@ -936,7 +1032,22 @@ class PageOne(Screen):
                     
                     #mycursor.execute('insert into device_data (D_Number,Serial,Start_date,End_date, Diagnostic, Code,Operator_Id,Bed_Id) values (%s,%s,%s,%s,%s,%s,%s,%s)', ( 'CONCAT'(host_N, ' ', start_time),host_N, start_time, end_time, 'ok', reason,opID,shared.get_bedId() ))
                     print("Error Working")
+                    self.log_step(7, 'MOTION', 'Committing failure record to DB')
                     mydb.commit()
+                    # Immediately queue this failure record into data_q so cloud sync sees it.
+                    try:
+                        self.log_step('7.1', 'MOTION', 'Queueing failure record into data_q')
+                        q_cursor = mydb.cursor()
+                        q_sql = ("INSERT IGNORE INTO data_q (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side, Update_status, Insert_date) "
+                                 "VALUES (CONCAT(%s,' ',%s), %s, %s, %s, %s, %s, %s, %s, %s, 'no', NOW())")
+                        q_values = (host_N, end_time, host_N, self.start_time, end_time, 'failed', reason, opID, shared.get_bedId(), self.side_selected)
+                        q_cursor.execute(q_sql, q_values)
+                        mydb.commit()
+                        self.log_step('7.2', 'MOTION', f'data_q queued (rowcount={q_cursor.rowcount})')
+                        q_cursor.close()
+                    except Exception as e:
+                        self.log_error('7.2', 'MOTION', 'Failed to queue failure record into data_q', e)
+                    self.log_step(8, 'MOTION', 'Closing DB resources')
                     mycursor.close()
                     mydb.close()
                     print("Error DB written")
@@ -965,29 +1076,55 @@ class PageOne(Screen):
                     #self.comp.bind(on_release=self.show_hospital_selection)
                     self.comp.bind(on_release=lambda instance: (self.stop_long_beeping(), self.show_hospital_selection(instance)))
                     #self.layout.add_widget(self.back_button1)
+                    self.log_step(9, 'MOTION', 'Starting long beeping alert thread')
                     self.start_long_beeping()
+                    # Trigger cloud sync on failure as well (to flush any pending queued rows)
+                    self.log_step(10, 'MOTION', 'Triggering asynchronous cloud sync after motion failure')
+                    Thread(target=lambda: self.trigger_cloud_sync(phase='MOTION', start_step=11), daemon=True).start()
+                    return  # Exit after handling motion detection to prevent further execution
                 else:   
-                    print("in else")
+                    print("in else - no motion detected")
+                    self.log_step(4, 'CYCLE', 'No motion detected - updating baseline and continuing countdown')
+                    self.previous_distance = current_distance  # Update baseline for next check
                     minutes, seconds = divmod(self.countdown_time, 60)
                     self.countdown_label.text = f"{minutes:02}:{seconds:02}"
+                    print(f"Countdown: {minutes:02}:{seconds:02} ({self.countdown_time} seconds remaining)")
                     self.countdown_time -= 1
                     
         else:
+                # Countdown has reached 0 or below - cycle completed successfully
+                print("=" * 50)
+                print("CYCLE COMPLETED SUCCESSFULLY - COUNTDOWN REACHED 0")
+                print("=" * 50)
+                self.log_step(1, 'SUCCESS', 'Unscheduling countdown and marking completion')
                 Clock.unschedule(self.update_ten_minute_countdown)
+                
+                # CRITICAL: Turn LEDs green and update UI FIRST before database operations
+                self.log_step(2, 'SUCCESS', 'Setting LEDs to GREEN for success state')
+                self.strip.set_all_pixels(Color(0, 255, 0))  # Turn LEDs GREEN for success
+                self.strip.show()
+                print("LEDs turned GREEN after successful cycle")
+                
                 self.countdown_label.text = "SUCCESSFUL"
                 self.countdown_label.font_size = '50pt'
                 reason = "Success at end of 10 mins"
                 opID =shared.get_operatorId()
                 print(reason)
+                self.log_step(3, 'SUCCESS', 'Turning relay off')
                 lgpio.gpio_write(self.h, 20, True)  # Turn relay off
                 print("Relay 20 is deactivated")
                 lgpio.gpiochip_close(self.h)
+                
+                # Now do database operations (these might block)
+                print("Starting database write...")
+                self.log_step(4, 'SUCCESS', 'Opening DB connection')
                 mydb = mysql.connector.connect(
                     host='localhost',
                     user='root',
                     password="Robot123#",
                     database="robotdb"
                     )
+                self.log_step(5, 'SUCCESS', 'Creating cursor for success record insert')
                 mycursor = mydb.cursor()
                 end_time = time.localtime()
                 
@@ -1005,10 +1142,29 @@ class PageOne(Screen):
                 mycursor.execute(sql, values)
                 #mycursor.execute('insert into device_data (D_Number,Serial,Start_date,End_date, Diagnostic, Code,Operator_Id,Bed_Id) values (%s,%s,%s,%s,%s,%s,%s,%s)', ( 'CONCAT'(host_N, '', start_time),host_N, start_time, end_time, 'ok', reason,opID,shared.get_bedId() ))
                 print("Success Working")
+                self.log_step(6, 'SUCCESS', 'Committing success record to DB')
                 mydb.commit()
+                # Immediately queue this success record into data_q so cloud sync sees it in same run.
+                try:
+                    self.log_step('6.1', 'SUCCESS', 'Queueing success record into data_q')
+                    q_cursor = mydb.cursor()
+                    q_sql = ("INSERT IGNORE INTO data_q (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side, Update_status, Insert_date) "
+                             "VALUES (CONCAT(%s,' ',%s), %s, %s, %s, %s, %s, %s, %s, %s, 'no', NOW())")
+                    q_values = (host_N, end_time, host_N, self.start_time, end_time, 'ok', reason, opID, shared.get_bedId(), self.side_selected)
+                    q_cursor.execute(q_sql, q_values)
+                    mydb.commit()
+                    self.log_step('6.2', 'SUCCESS', f'data_q queued (rowcount={q_cursor.rowcount})')
+                    q_cursor.close()
+                except Exception as e:
+                    self.log_error('6.2', 'SUCCESS', 'Failed to queue success record into data_q', e)
+                self.log_step(7, 'SUCCESS', 'Closing DB resources')
                 mycursor.close()
                 mydb.close()
-                print("`Success` DB written")
+                print("`Success` DB written - database operations complete")
+                
+                # Start beeping before creating button
+                self.log_step(8, 'SUCCESS', 'Starting normal beeping thread')
+                self.start_beeping()
                 
                 #try:
                     # Execute the external script
@@ -1041,11 +1197,10 @@ class PageOne(Screen):
                 self.comp.bind(on_release=lambda instance: (self.stop_beeping(), self.show_hospital_selection(instance)))
                 #self.back_button.bind(on_release=self.go_to_begin_robot_page)
                 #self.add_widget(self.back_button)
-
-            # Set all LEDs back to red
-                self.strip.set_all_pixels(Color(0, 255, 0))
-                self.strip.show()
-                self.start_beeping()
+                self.log_step(9, 'SUCCESS', 'Added Done button to layout')
+                # Auto-trigger cloud sync asynchronously after successful cycle.
+                self.log_step(10, 'SUCCESS', 'Triggering asynchronous cloud sync (post-cycle)')
+                Thread(target=self.trigger_cloud_sync, daemon=True).start()
     def go_to_begin_robot_page(self, instance):
         self.layout.clear_widgets()
         self.create_main_content()

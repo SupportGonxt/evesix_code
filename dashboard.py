@@ -21,6 +21,11 @@ from pages import PageTwo, PageThree, FormPage
 from pageOne import PageOne
 from loginScreen import LoginScreen
 from diagnose import Diagnose
+import os
+try:
+    from version import VERSION
+except Exception:
+    VERSION = "v1.5"  # fallback if version module missing
 
 class SplashScreen(Screen):
     def __init__(self, **kwargs):
@@ -40,6 +45,11 @@ class Dashboard(BoxLayout):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.orientation = 'vertical'
+        # Verify image assets early
+        self._verify_images([
+            'logo1.png',
+            'signal_0.png','signal_1.png','signal_2.png','signal_3.png','signal_4.png'
+        ])
 
         # Set the main background to white
         with self.canvas.before:
@@ -56,6 +66,20 @@ class Dashboard(BoxLayout):
 
         logo = Image(source='images/logo1.png', size_hint=(1, 1))  # Logo size
         header.add_widget(logo)
+        # Version label (top-left inside header)
+        try:
+            from version import VERSION as _DASH_VERSION
+        except Exception:
+            _DASH_VERSION = "v1.5"
+        ver_label = Label(text=f"[color=888888]{_DASH_VERSION}[/color]",
+                          markup=True,
+                          size_hint=(None, None),
+                          font_size='8sp',
+                          halign='left',
+                          valign='middle')
+        # Force texture update so width/height are correct
+        ver_label.bind(texture_size=lambda *_: None)
+        header.add_widget(ver_label)
 
         header_right = BoxLayout(orientation='horizontal', size_hint=(0.8, 1), spacing=1)
         
@@ -229,6 +253,14 @@ class Dashboard(BoxLayout):
 
     def stop_app(self, *args):
         App.get_running_app().stop()
+
+    def _verify_images(self, filenames):
+        base = os.path.join(os.path.dirname(__file__), 'images')
+        missing = [f for f in filenames if not os.path.exists(os.path.join(base, f))]
+        if missing:
+            print(f"[IMAGE WARNING] Missing image files: {', '.join(missing)} in 'images/' directory.")
+            print(f"Ensure directory exists: {base}")
+            print("Widgets using these images will appear blank.")
 
 
 

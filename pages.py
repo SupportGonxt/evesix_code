@@ -16,6 +16,8 @@ from kivy.uix.progressbar import ProgressBar
 from kivy.uix.image import Image
 import shared
 import subprocess
+import os
+import sys
 import threading
 import mysql.connector
 import time
@@ -230,11 +232,18 @@ class PageThree(Screen):
     def run_scripts_with_progress(self, popup):
         try:
             # Step 1: Run Master.py and update progress to 50%
-            result = subprocess.run(['python', 'Master.py'], capture_output=True, text=True, check=True)
+            result = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Master.py')], capture_output=True, text=True, check=True)
             Clock.schedule_once(lambda dt: self.update_progress(50), 0)
 
             # Step 2: Run LocalStor.py and update to 100%
-            process = subprocess.Popen(['python', 'cloudSync.py'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            CLOUD_SYNC_PATH = '/home/gonxt/evesix_code/cloudSync.py'
+            if not os.path.isfile(CLOUD_SYNC_PATH):
+                print(f'[SyncPopup] ERROR: Hardcoded cloudSync.py missing at {CLOUD_SYNC_PATH}')
+                Clock.schedule_once(lambda dt: self.update_progress(100), 0)
+                Clock.schedule_once(lambda dt: popup.dismiss(), 0.5)
+                return
+            print(f'[SyncPopup] Using hardcoded cloudSync.py at {CLOUD_SYNC_PATH}')
+            process = subprocess.Popen([sys.executable, CLOUD_SYNC_PATH], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             stdout, stderr = process.communicate()
             Clock.schedule_once(lambda dt: self.update_progress(100), 0)
 

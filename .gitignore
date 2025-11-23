@@ -22,7 +22,6 @@ wheels/
 
 # Virtual Environment
 foobar/
-
 venv/
 ENV/
 
