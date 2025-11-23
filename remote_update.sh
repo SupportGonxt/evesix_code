@@ -155,6 +155,9 @@ for file in dashboard.py pageOne.py cloudSync.py; do
     fi
 done
 
+# Ensure startup script has execute permissions
+chmod +x /home/gonxt/startup.sh 2>/dev/null || true
+
 log "=== Update Complete ==="
 log "Log file saved to: $LOG_FILE"
 log ""
