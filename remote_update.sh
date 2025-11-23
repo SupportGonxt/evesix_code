@@ -88,7 +88,10 @@ log "Virtual environment verified at $NEW_REPO_DIR/$VENV_DIR"
 
 # Create startup script
 log "Creating startup script..."
-cat > /home/gonxt/startup.sh << 'EOF'
+
+# Create with proper permissions
+STARTUP_SCRIPT="/home/gonxt/startup.sh"
+cat > "$STARTUP_SCRIPT" << 'EOF' || { log "ERROR: Cannot write to $STARTUP_SCRIPT - try running with sudo"; exit 1; }
 #!/bin/bash
 
 # Wait for network
@@ -118,8 +121,8 @@ python3 dashboard.py &
 echo "Dashboard started"
 EOF
 
-chmod +x /home/gonxt/startup.sh
-log "Startup script created at /home/gonxt/startup.sh"
+chmod +x "$STARTUP_SCRIPT" || { log "ERROR: Cannot set execute permission on $STARTUP_SCRIPT"; exit 1; }
+log "Startup script created at $STARTUP_SCRIPT"
 
 # Clean up .bashrc from old dashboard entries
 log "Cleaning up .bashrc..."
