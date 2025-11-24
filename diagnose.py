@@ -23,6 +23,7 @@ from kivy.graphics import Color, Rectangle
 import socket
 import sys
 from io import StringIO
+import threading
 
 
 
@@ -338,6 +339,10 @@ class Diagnose(TabbedPanel):
             self.v_text_area.text = f"Error: {e.output}"
 
     def signal_report(self, dt):
+        # Run connectivity check in background thread to avoid blocking UI
+        threading.Thread(target=self._check_connectivity, daemon=True).start()
+    
+    def _check_connectivity(self):
         try:
             # Check real internet connectivity
             socket.create_connection(("8.8.8.8", 53), timeout=3)
@@ -348,7 +353,8 @@ class Diagnose(TabbedPanel):
             print(f"Signal check error: {e}")
             signal_strength = 0
         
-        self.signal_icon.source = f"images/signal_{signal_strength}.png"
+        # Update UI on main thread
+        Clock.schedule_once(lambda _: setattr(self.signal_icon, 'source', f"images/signal_{signal_strength}.png"))
 
    
     def sensor_report(self, dt):

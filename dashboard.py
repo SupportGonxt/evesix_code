@@ -14,6 +14,7 @@ import mysql.connector
 import platform
 import time
 import socket
+import threading
 
 
 
@@ -46,6 +47,7 @@ class Dashboard(BoxLayout):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.orientation = 'vertical'
+        self.current_signal_strength = 0  # Track signal strength
         # Verify image assets early
         self._verify_images([
             'logo1.png',
@@ -207,6 +209,10 @@ class Dashboard(BoxLayout):
         
         
     def update_signal(self, dt):
+        # Run connectivity check in background thread to avoid blocking UI
+        threading.Thread(target=self._check_connectivity, daemon=True).start()
+    
+    def _check_connectivity(self):
         try:
             # Check real internet connectivity
             socket.create_connection(("8.8.8.8", 53), timeout=3)
@@ -216,10 +222,14 @@ class Dashboard(BoxLayout):
         except Exception as e:
             print(f"Signal check error: {e}")
             signal_strength = 0
-
-        # Update the icon and label
-        Clock.schedule_once(lambda _: setattr(self.signal_icon, 'source', f"images/signal_{signal_strength}.png"))
-        Clock.schedule_once(lambda _: setattr(self.signal_label, 'text', f"Strength: {signal_strength}/4"))
+        
+        # Update UI on main thread
+        self.current_signal_strength = signal_strength
+        Clock.schedule_once(lambda _: self._update_signal_ui(signal_strength))
+    
+    def _update_signal_ui(self, signal_strength):
+        self.signal_icon.source = f"images/signal_{signal_strength}.png"
+        self.signal_label.text = f"Strength: {signal_strength}/4"
 
     def _update_rect(self, instance, value):
         self.rect.pos = instance.pos
