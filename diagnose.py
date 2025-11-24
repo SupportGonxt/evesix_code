@@ -21,6 +21,8 @@ import platform
 from kivy.uix.boxlayout import BoxLayout
 from kivy.graphics import Color, Rectangle
 import socket
+import sys
+from io import StringIO
 
 
 
@@ -29,6 +31,18 @@ warnings.filterwarnings("ignore", category=PWMSoftwareFallback)
 warnings.filterwarnings("ignore", category=DistanceSensorNoEcho)
 
 
+# Custom class to capture stdout
+class LogCapture:
+    def __init__(self, original_stdout, buffer):
+        self.original_stdout = original_stdout
+        self.buffer = buffer
+    
+    def write(self, text):
+        self.original_stdout.write(text)  # Still print to console
+        self.buffer.write(text)  # Also capture to buffer
+    
+    def flush(self):
+        self.original_stdout.flush()
 
 
 #sensor_available = False
@@ -244,6 +258,31 @@ class Diagnose(TabbedPanel):
         # Add the table to your tab
         tab5.add_widget(table)
         self.add_widget(tab5)
+        
+        # Tab 6: Logs
+        tab6 = TabbedPanelItem(text="Logs", background_color=(0.57, 2, 6.5, 1))
+        
+        # Create scrollable text area for logs
+        from kivy.uix.scrollview import ScrollView
+        scroll = ScrollView(size_hint=(1, 1))
+        self.log_text_area = TextInput(
+            hint_text="Application logs will appear here...",
+            readonly=True,
+            size_hint=(1, None),
+            multiline=True
+        )
+        self.log_text_area.bind(minimum_height=self.log_text_area.setter('height'))
+        scroll.add_widget(self.log_text_area)
+        tab6.add_widget(scroll)
+        self.add_widget(tab6)
+        
+        # Redirect stdout to capture logs
+        self.log_buffer = StringIO()
+        self.original_stdout = sys.stdout
+        sys.stdout = LogCapture(self.original_stdout, self.log_buffer)
+        
+        # Schedule log updates
+        Clock.schedule_interval(self.update_logs, 1)
     
        
        
@@ -386,3 +425,24 @@ class Diagnose(TabbedPanel):
         buzzer.on()
         sleep(0.2)
         buzzer.off()
+    
+    def update_logs(self, dt):
+        """Update the log display with new content from the buffer"""
+        try:
+            # Get current buffer content
+            log_content = self.log_buffer.getvalue()
+            
+            # Update text area (limit to last 10000 characters to prevent memory issues)
+            if len(log_content) > 10000:
+                log_content = log_content[-10000:]
+                # Reset buffer to prevent unlimited growth
+                self.log_buffer.truncate(0)
+                self.log_buffer.seek(0)
+                self.log_buffer.write(log_content)
+            
+            self.log_text_area.text = log_content
+            
+            # Auto-scroll to bottom
+            self.log_text_area.cursor = (0, 0)
+        except Exception as e:
+            print(f"Error updating logs: {e}")
