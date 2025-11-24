@@ -20,6 +20,7 @@ import mysql.connector
 import platform
 from kivy.uix.boxlayout import BoxLayout
 from kivy.graphics import Color, Rectangle
+import socket
 
 
 
@@ -298,13 +299,17 @@ class Diagnose(TabbedPanel):
             self.v_text_area.text = f"Error: {e.output}"
 
     def signal_report(self, dt):
-        
         try:
-            stats = psutil.net_io_counters()
-            signal_strength = int(stats.bytes_recv / 1e6) % 5
-            self.signal_icon.source = f"images/signal_{signal_strength}.png"
+            # Check real internet connectivity
+            socket.create_connection(("8.8.8.8", 53), timeout=3)
+            signal_strength = 4  # Connected
+        except (socket.error, socket.timeout):
+            signal_strength = 0  # Not connected
         except Exception as e:
-            self.signal_icon.source = "images/signal_0.png"
+            print(f"Signal check error: {e}")
+            signal_strength = 0
+        
+        self.signal_icon.source = f"images/signal_{signal_strength}.png"
 
    
     def sensor_report(self, dt):
