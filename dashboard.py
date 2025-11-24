@@ -13,6 +13,7 @@ import psutil
 import mysql.connector
 import platform
 import time
+import socket
 
 
 
@@ -207,17 +208,18 @@ class Dashboard(BoxLayout):
         
     def update_signal(self, dt):
         try:
-            # Simulate signal strength (Replace with real logic)
-            stats = psutil.net_io_counters()
-            signal_strength = int(stats.bytes_recv / 1e6) % 5  # Simulated strength (0 to 4)
-
-            # Update the icon and label
-            #self.signal_icon.source = f"images/signal_{signal_strength}.png"
-            #self.signal_label.text = f"Strength: {signal_strength}/4"
-            Clock.schedule_once(lambda _: setattr(self.signal_icon, 'source', f"images/signal_{signal_strength}.png"))
-            Clock.schedule_once(lambda _: setattr(self.signal_label, 'text', f"Strength: {signal_strength}/4"))
+            # Check real internet connectivity
+            socket.create_connection(("8.8.8.8", 53), timeout=3)
+            signal_strength = 4  # Connected
+        except (socket.error, socket.timeout):
+            signal_strength = 0  # Not connected
         except Exception as e:
-            self.signal_label.text = f"Error: {str(e)}"
+            print(f"Signal check error: {e}")
+            signal_strength = 0
+
+        # Update the icon and label
+        Clock.schedule_once(lambda _: setattr(self.signal_icon, 'source', f"images/signal_{signal_strength}.png"))
+        Clock.schedule_once(lambda _: setattr(self.signal_label, 'text', f"Strength: {signal_strength}/4"))
 
     def _update_rect(self, instance, value):
         self.rect.pos = instance.pos
