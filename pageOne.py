@@ -389,13 +389,13 @@ class PageOne(Screen):
             self.timer_event = None
             print("Initial countdown timer stopped")
         
-        # Reset LEDs to off when going back
+        # Set LEDs to green when going back
         try:
-            self.strip.set_all_pixels(Color(0, 0, 0))
+            self.strip.set_all_pixels(Color(0, 255, 0))
             self.strip.show()
-            print("LEDs turned off when going back")
+            print("LEDs turned green when going back")
         except Exception as e:
-            print(f"Error turning off LEDs: {e}")
+            print(f"Error changing LEDs: {e}")
         
         #self.sensor.close()
         self.show_hospital_selection(instance)
@@ -529,6 +529,9 @@ class PageOne(Screen):
         )
         self.hospital_button.bind(on_release=dropdown.open)
 
+        # Unbind previous dropdown selections to prevent duplicates
+        dropdown.unbind(on_select=lambda *args: None)
+        
         # Single binding for dropdown selection
         def on_select(instance, value):
             self.hospital_button.text = value 
