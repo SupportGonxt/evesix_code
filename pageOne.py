@@ -383,6 +383,20 @@ class PageOne(Screen):
         self.layout.add_widget(main_layout)
     
     def call_back(self, instance):
+        # Stop the initial countdown timer if it's running
+        if hasattr(self, 'timer_event') and self.timer_event is not None:
+            self.timer_event.cancel()
+            self.timer_event = None
+            print("Initial countdown timer stopped")
+        
+        # Reset LEDs to off when going back
+        try:
+            self.strip.set_all_pixels(Color(0, 0, 0))
+            self.strip.show()
+            print("LEDs turned off when going back")
+        except Exception as e:
+            print(f"Error turning off LEDs: {e}")
+        
         #self.sensor.close()
         self.show_hospital_selection(instance)
 
@@ -814,6 +828,7 @@ class PageOne(Screen):
             self.strip.show()
         else:
             self.countdown_time = self.timer_event 
+    
     
     def long_beep(self,duration):
         buzzer.on()
