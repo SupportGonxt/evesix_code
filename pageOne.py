@@ -517,8 +517,14 @@ class PageOne(Screen):
             dropdown.add_widget(btn)
 
         # Remove old hospital_button if it exists to prevent duplicate widgets
-        if hasattr(self, 'hospital_button') and self.hospital_button in self.layout.children:
-            self.layout.remove_widget(self.hospital_button)
+        if hasattr(self, 'hospital_button'):
+            # Unbind all previous events
+            self.hospital_button.unbind(on_release=self.hospital_button.dispatch)
+            if self.hospital_button in self.layout.children:
+                self.layout.remove_widget(self.hospital_button)
+        
+        # Store dropdown as instance variable to prevent garbage collection
+        self.ward_dropdown = dropdown
         
         self.hospital_button = Button(
             text='Select a ward',
@@ -527,16 +533,13 @@ class PageOne(Screen):
             #height=77,
             pos_hint = {"x":0.15,"y":0.5}
         )
-        self.hospital_button.bind(on_release=dropdown.open)
-
-        # Unbind previous dropdown selections to prevent duplicates
-        dropdown.unbind(on_select=lambda *args: None)
+        self.hospital_button.bind(on_release=self.ward_dropdown.open)
         
         # Single binding for dropdown selection
         def on_select(instance, value):
             self.hospital_button.text = value 
             self.handle_selection(instance, value) 
-        dropdown.bind(on_select=on_select)
+        self.ward_dropdown.bind(on_select=on_select)
 
         self.layout.add_widget(self.hospital_button)
         
