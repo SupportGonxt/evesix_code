@@ -15,9 +15,9 @@ curl -fsSL "https://raw.githubusercontent.com/SupportGonxt/evesix_code/main/remo
 # Make executable
 chmod +x /tmp/remote_update_$TIMESTAMP.sh
 
-# Execute
+# Execute with sudo (needed for crontab and startup script creation)
 echo "Running update script..."
-bash /tmp/remote_update_$TIMESTAMP.sh
+sudo bash /tmp/remote_update_$TIMESTAMP.sh
 
 # Cleanup
 rm -f /tmp/remote_update_$TIMESTAMP.sh

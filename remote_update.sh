@@ -52,13 +52,22 @@ if [ -n "$CURRENT_DIR" ] && [ -d "$CURRENT_DIR" ]; then
     log "Backup created successfully"
 fi
 
+# Check if git is installed
+if ! command -v git &> /dev/null; then
+    log "ERROR: git is not installed. Please install git first: sudo apt-get install git"
+    exit 1
+fi
+
 # Handle migration vs update
 if [ "$MIGRATION_MODE" = true ]; then
     log "Performing migration to new location..."
     
     # Clone fresh repository to new location
     log "Cloning repository to $NEW_REPO_DIR"
-    git clone "$REPO_URL" "$NEW_REPO_DIR"
+    if ! git clone "$REPO_URL" "$NEW_REPO_DIR"; then
+        log "ERROR: Failed to clone repository"
+        exit 1
+    fi
     
     log "Migration completed successfully"
 else
@@ -67,13 +76,23 @@ else
     # Update existing repository
     cd "$NEW_REPO_DIR"
     
+    # Verify this is a git repository
+    if [ ! -d ".git" ]; then
+        log "ERROR: $NEW_REPO_DIR is not a git repository"
+        exit 1
+    fi
+    
     # Stash any local changes
     log "Stashing local changes..."
-    git stash
+    git stash || log "WARNING: Git stash failed, continuing..."
     
-    # Pull latest changes
+    # Pull latest changes with error handling
     log "Pulling latest code..."
-    git pull origin main
+    if ! git pull origin main; then
+        log "ERROR: Git pull failed. There may be merge conflicts."
+        log "Manual intervention required. Check the repository state."
+        exit 1
+    fi
     
     log "Update completed successfully"
 fi
@@ -89,72 +108,58 @@ log "Virtual environment verified at $NEW_REPO_DIR/$VENV_DIR"
 # Create startup script
 log "Creating startup script..."
 
-# Create with proper permissions
+# Create with proper permissions (use sudo for writing to /home/gonxt)
 STARTUP_SCRIPT="/home/gonxt/startup.sh"
-cat > "$STARTUP_SCRIPT" << 'EOF' || { log "ERROR: Cannot write to $STARTUP_SCRIPT - try running with sudo"; exit 1; }
+sudo bash -c "cat > $STARTUP_SCRIPT" << 'EOF' || { log "ERROR: Cannot write to $STARTUP_SCRIPT"; exit 1; }
 #!/bin/bash
 
-# Wait for network
+# Wait for system to be ready
 sleep 5
 
-# Determine which network interface is active
-if nmcli device status | grep -q "usb0.*connected"; then
-    echo "Modem network detected (usb0)"
-elif nmcli device status | grep -q "wlan0.*connected"; then
-    echo "WiFi network detected (wlan0)"
-else
-    echo "No network connection detected"
-fi
-
-# Kill any existing dashboard processes
-pkill -f "python.*dashboard.py" || true
-
-# Change to repository directory
+# Change to evesix_code directory
 cd /home/gonxt/evesix_code
 
-# Activate virtual environment
-source shatyenv/bin/activate
-
-# Start dashboard
-python3 dashboard.py &
-
-echo "Dashboard started"
-EOF
-
-chmod +x "$STARTUP_SCRIPT" || { log "ERROR: Cannot set execute permission on $STARTUP_SCRIPT"; exit 1; }
-log "Startup script created at $STARTUP_SCRIPT"
-
-# Clean up .bashrc from old dashboard entries
-log "Cleaning up .bashrc..."
-# Remove any lines containing dashboard.py to ensure clean state
-sed -i '/dashboard\.py/d' ~/.bashrc
-log ".bashrc cleaned - removed all dashboard.py references"
-
-# Update crontab for auto-start
-log "Updating crontab..."
-# Remove old entries
-crontab -l 2>/dev/null | grep -v "startup.sh" | grep -v "cloudSync.py" | crontab - || true
-
-# Add new entries
-(crontab -l 2>/dev/null; echo "@reboot /home/gonxt/startup.sh") | crontab -
-if [ $? -ne 0 ]; then
-    log "ERROR: Failed to add startup.sh to crontab"
-else
-    log "Added startup.sh to crontab"
+# Verify virtual environment exists
+if [ ! -f "shatyenv/bin/activate" ]; then
+    echo "ERROR: Virtual environment not found" >> /home/gonxt/startup_error.log
+    exit 1
 fi
 
-(crontab -l 2>/dev/null; echo "@reboot sleep 120 && cd /home/gonxt/evesix_code && /home/gonxt/evesix_code/shatyenv/bin/python3 /home/gonxt/evesix_code/cloudSync.py") | crontab -
-if [ $? -ne 0 ]; then
-    log "ERROR: Failed to add cloudSync.py to crontab"
+# Activate virtual environment
+source /home/gonxt/evesix_code/shatyenv/bin/activate
+
+# Launch dashboard and cloudSync in background
+python3 /home/gonxt/evesix_code/dashboard.py &
+python3 /home/gonxt/evesix_code/cloudSync.py &
+
+EOF
+
+sudo chmod +x "$STARTUP_SCRIPT" || { log "ERROR: Cannot set execute permission on $STARTUP_SCRIPT"; exit 1; }
+log "Startup script created at $STARTUP_SCRIPT with improved error handling"
+
+# Clean up .bashrc - remove any old dashboard entries
+log "Cleaning up .bashrc..."
+# Remove any old dashboard.py lines from .bashrc (cleanup only)
+sed -i '/dashboard\.py/d' ~/.bashrc 2>/dev/null || true
+sed -i '/# Launch Dashboard/d' ~/.bashrc 2>/dev/null || true
+log ".bashrc cleaned up (dashboard runs via startup.sh only)"
+
+# Update crontab for auto-start (use sudo crontab for root)
+log "Updating root crontab..."
+# Check if entry already exists to prevent duplicates
+if sudo crontab -l 2>/dev/null | grep -q "@reboot /home/gonxt/startup.sh"; then
+    log "Startup entry already exists in crontab"
 else
-    log "Added cloudSync.py to crontab"
+    # Add startup.sh to root crontab
+    (sudo crontab -l 2>/dev/null; echo "@reboot /home/gonxt/startup.sh") | sudo crontab -
+    if [ $? -eq 0 ]; then
+        log "Added startup.sh to root crontab"
+    else
+        log "WARNING: Failed to add startup.sh to root crontab"
+    fi
 fi
 
 log "Crontab updated successfully"
-
-# Verify crontab entries
-log "Verifying crontab entries:"
-crontab -l 2>/dev/null | tee -a "$LOG_FILE"
 
 # Test basic imports
 log "Testing Python environment..."
@@ -185,12 +190,8 @@ echo "========================================="
 echo "Update completed successfully!"
 echo "Log saved to: $LOG_FILE"
 echo ""
-echo "Review the log above for any warnings."
+echo "IMPORTANT NEXT STEPS:"
+echo "1. Reboot the robot: sudo reboot"
+echo "2. Dashboard will auto-start from /home/gonxt/evesix_code"
 echo ""
 echo "========================================="
-echo "Rebooting in 5 seconds..."
-echo "Press Ctrl+C to cancel reboot."
-echo "========================================="
-sleep 5
-log "Rebooting system..."
-sudo reboot
