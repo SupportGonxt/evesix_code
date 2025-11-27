@@ -168,12 +168,11 @@ fi
 
 # Update .bashrc to use new dashboard path
 log "Updating .bashrc..."
-# Remove any lines containing dashboard.py or cloudSync.py
-sed -i '/dashboard\.py/d' /home/gonxt/.bashrc 2>/dev/null || true
-sed -i '/cloudSync\.py/d' /home/gonxt/.bashrc 2>/dev/null || true
+# Replace old kivy path with new evesix_code path using sed substitution
+sed -i 's|python3 /home/gonxt/kivy/dashboard\.py|python3 /home/gonxt/evesix_code/dashboard.py|g' /home/gonxt/.bashrc 2>/dev/null || true
+sed -i 's|python3 /home/gonxt/kivy/cloudSync\.py|python3 /home/gonxt/evesix_code/cloudSync.py|g' /home/gonxt/.bashrc 2>/dev/null || true
+# Also remove any # Launch Dashboard comments
 sed -i '/# Launch Dashboard/d' /home/gonxt/.bashrc 2>/dev/null || true
-# Add new dashboard path
-echo "python3 /home/gonxt/evesix_code/dashboard.py" >> /home/gonxt/.bashrc
 log ".bashrc updated to use new evesix_code path"
 
 # Update crontab for auto-start (use sudo crontab for root)
