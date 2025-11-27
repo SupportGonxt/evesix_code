@@ -126,8 +126,9 @@ log "Startup script created at $STARTUP_SCRIPT"
 
 # Clean up .bashrc from old dashboard entries
 log "Cleaning up .bashrc..."
-sed -i '\|/home/gonxt/kivy/dashboard.py|d' ~/.bashrc
-log ".bashrc cleaned"
+# Remove any lines containing dashboard.py to ensure clean state
+sed -i '/dashboard\.py/d' ~/.bashrc
+log ".bashrc cleaned - removed all dashboard.py references"
 
 # Update crontab for auto-start
 log "Updating crontab..."
@@ -136,9 +137,24 @@ crontab -l 2>/dev/null | grep -v "startup.sh" | grep -v "cloudSync.py" | crontab
 
 # Add new entries
 (crontab -l 2>/dev/null; echo "@reboot /home/gonxt/startup.sh") | crontab -
+if [ $? -ne 0 ]; then
+    log "ERROR: Failed to add startup.sh to crontab"
+else
+    log "Added startup.sh to crontab"
+fi
+
 (crontab -l 2>/dev/null; echo "@reboot sleep 120 && cd /home/gonxt/evesix_code && /home/gonxt/evesix_code/shatyenv/bin/python3 /home/gonxt/evesix_code/cloudSync.py") | crontab -
+if [ $? -ne 0 ]; then
+    log "ERROR: Failed to add cloudSync.py to crontab"
+else
+    log "Added cloudSync.py to crontab"
+fi
 
 log "Crontab updated successfully"
+
+# Verify crontab entries
+log "Verifying crontab entries:"
+crontab -l 2>/dev/null | tee -a "$LOG_FILE"
 
 # Test basic imports
 log "Testing Python environment..."
@@ -164,15 +180,17 @@ chmod +x /home/gonxt/startup.sh 2>/dev/null || true
 log "=== Update Complete ==="
 log "Log file saved to: $LOG_FILE"
 log ""
-log "IMPORTANT: You must reboot the robot for changes to take effect"
-log "Run: sudo reboot"
 echo ""
 echo "========================================="
 echo "Update completed successfully!"
 echo "Log saved to: $LOG_FILE"
 echo ""
-echo "Next steps:"
-echo "1. Review the log file above for any warnings"
-echo "2. Reboot the robot: sudo reboot"
-echo "3. After reboot, verify dashboard starts automatically"
+echo "Review the log above for any warnings."
+echo ""
 echo "========================================="
+echo "Rebooting in 5 seconds..."
+echo "Press Ctrl+C to cancel reboot."
+echo "========================================="
+sleep 5
+log "Rebooting system..."
+sudo reboot
