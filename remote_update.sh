@@ -22,6 +22,14 @@ log() {
 LOG_FILE="/home/gonxt/update_log_$(date +%Y%m%d_%H%M%S).txt"
 log "=== Robot Update Script Started ==="
 
+# Kill any running processes from old location immediately
+log "Stopping any running processes from old installation..."
+pkill -9 -f "/home/gonxt/kivy/dashboard.py" 2>/dev/null || true
+pkill -9 -f "/home/gonxt/kivy/cloudSync.py" 2>/dev/null || true
+sudo pkill -9 -f "/home/gonxt/kivy/dashboard.py" 2>/dev/null || true
+sudo pkill -9 -f "/home/gonxt/kivy/cloudSync.py" 2>/dev/null || true
+log "Old processes stopped"
+
 # Detect which directory exists
 MIGRATION_MODE=false
 CURRENT_DIR=""
@@ -97,6 +105,12 @@ else
     log "Update completed successfully"
 fi
 
+# Fix ownership and permissions
+log "Fixing ownership and permissions..."
+sudo chown -R gonxt:gonxt "$NEW_REPO_DIR"
+sudo chmod +x "$NEW_REPO_DIR/$VENV_DIR/bin/activate" 2>/dev/null || true
+log "Ownership set to gonxt:gonxt"
+
 # Verify virtual environment exists
 cd "$NEW_REPO_DIR"
 if [ ! -d "$VENV_DIR" ]; then
@@ -137,19 +151,31 @@ EOF
 sudo chmod +x "$STARTUP_SCRIPT" || { log "ERROR: Cannot set execute permission on $STARTUP_SCRIPT"; exit 1; }
 log "Startup script created at $STARTUP_SCRIPT with improved error handling"
 
-# Clean up .bashrc - remove any old dashboard entries
-log "Cleaning up .bashrc..."
-# Remove any old dashboard.py lines from .bashrc (cleanup only)
-sed -i '/dashboard\.py/d' ~/.bashrc 2>/dev/null || true
-sed -i '/# Launch Dashboard/d' ~/.bashrc 2>/dev/null || true
-log ".bashrc cleaned up (dashboard runs via startup.sh only)"
+# Disable old startup script if it exists
+if [ -f "/home/gonxt/kivy/startup.sh" ]; then
+    log "Disabling old startup script..."
+    sudo mv /home/gonxt/kivy/startup.sh /home/gonxt/kivy/startup.sh.disabled 2>/dev/null || true
+    log "Old startup script disabled"
+fi
+
+# Update .bashrc to use new dashboard path
+log "Updating .bashrc..."
+# Remove any lines containing dashboard.py or cloudSync.py
+sed -i '/dashboard\.py/d' /home/gonxt/.bashrc 2>/dev/null || true
+sed -i '/cloudSync\.py/d' /home/gonxt/.bashrc 2>/dev/null || true
+sed -i '/# Launch Dashboard/d' /home/gonxt/.bashrc 2>/dev/null || true
+# Add new dashboard path
+echo "python3 /home/gonxt/evesix_code/dashboard.py" >> /home/gonxt/.bashrc
+log ".bashrc updated to use new evesix_code path"
 
 # Update crontab for auto-start (use sudo crontab for root)
 log "Updating root crontab..."
 
-# Remove old kivy startup entries first
-log "Removing old crontab entries..."
-sudo crontab -l 2>/dev/null | grep -v "/home/gonxt/kivy/startup.sh" | sudo crontab - 2>/dev/null || true
+# Remove old kivy startup entries from both root and user crontabs
+log "Removing old crontab entries from all users..."
+sudo crontab -l 2>/dev/null | grep -v "/home/gonxt/kivy" | sudo crontab - 2>/dev/null || true
+crontab -l 2>/dev/null | grep -v "/home/gonxt/kivy" | crontab - 2>/dev/null || true
+log "Old crontab entries removed"
 
 # Check if new entry already exists to prevent duplicates
 if sudo crontab -l 2>/dev/null | grep -q "@reboot /home/gonxt/startup.sh"; then
