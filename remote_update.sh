@@ -95,16 +95,17 @@ else
         exit 1
     fi
     
-    # Add as safe directory for git
+    # Add as safe directory for git (both for root and gonxt user)
     git config --global --add safe.directory "$NEW_REPO_DIR" 2>/dev/null || true
+    sudo -u gonxt git config --global --add safe.directory "$NEW_REPO_DIR" 2>/dev/null || true
     
-    # Stash any local changes
+    # Stash any local changes (run as gonxt user)
     log "Stashing local changes..."
-    git stash || log "WARNING: Git stash failed, continuing..."
+    sudo -u gonxt git stash || log "WARNING: Git stash failed, continuing..."
     
-    # Pull latest changes with error handling
+    # Pull latest changes with error handling (run as gonxt user)
     log "Pulling latest code..."
-    if ! git pull origin main; then
+    if ! sudo -u gonxt git pull origin main; then
         log "ERROR: Git pull failed. There may be merge conflicts."
         log "Manual intervention required. Check the repository state."
         exit 1
