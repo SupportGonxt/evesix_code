@@ -146,7 +146,12 @@ log ".bashrc cleaned up (dashboard runs via startup.sh only)"
 
 # Update crontab for auto-start (use sudo crontab for root)
 log "Updating root crontab..."
-# Check if entry already exists to prevent duplicates
+
+# Remove old kivy startup entries first
+log "Removing old crontab entries..."
+sudo crontab -l 2>/dev/null | grep -v "/home/gonxt/kivy/startup.sh" | sudo crontab - 2>/dev/null || true
+
+# Check if new entry already exists to prevent duplicates
 if sudo crontab -l 2>/dev/null | grep -q "@reboot /home/gonxt/startup.sh"; then
     log "Startup entry already exists in crontab"
 else
@@ -181,6 +186,11 @@ done
 
 # Ensure startup script has execute permissions
 chmod +x /home/gonxt/startup.sh 2>/dev/null || true
+
+# Kill old processes running from /home/gonxt/kivy
+log "Stopping old processes from previous installation..."
+sudo pkill -f "/home/gonxt/kivy/dashboard.py" 2>/dev/null || log "No old dashboard process found"
+sudo pkill -f "/home/gonxt/kivy/cloudSync.py" 2>/dev/null || log "No old cloudSync process found"
 
 log "=== Update Complete ==="
 log "Log file saved to: $LOG_FILE"
