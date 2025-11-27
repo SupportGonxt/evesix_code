@@ -187,10 +187,12 @@ done
 # Ensure startup script has execute permissions
 chmod +x /home/gonxt/startup.sh 2>/dev/null || true
 
-# Kill old processes running from /home/gonxt/kivy
+# Kill old processes running from /home/gonxt/kivy (both root and user processes)
 log "Stopping old processes from previous installation..."
-sudo pkill -f "/home/gonxt/kivy/dashboard.py" 2>/dev/null || log "No old dashboard process found"
-sudo pkill -f "/home/gonxt/kivy/cloudSync.py" 2>/dev/null || log "No old cloudSync process found"
+pkill -f "/home/gonxt/kivy/dashboard.py" 2>/dev/null || log "No old dashboard process found"
+pkill -f "/home/gonxt/kivy/cloudSync.py" 2>/dev/null || log "No old cloudSync process found"
+sudo pkill -f "/home/gonxt/kivy/dashboard.py" 2>/dev/null || true
+sudo pkill -f "/home/gonxt/kivy/cloudSync.py" 2>/dev/null || true
 
 log "=== Update Complete ==="
 log "Log file saved to: $LOG_FILE"
