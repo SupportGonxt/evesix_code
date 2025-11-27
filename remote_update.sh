@@ -81,6 +81,11 @@ if [ "$MIGRATION_MODE" = true ]; then
 else
     log "Performing update in existing location..."
     
+    # Fix ownership FIRST before git operations
+    log "Fixing ownership and permissions..."
+    sudo chown -R gonxt:gonxt "$NEW_REPO_DIR"
+    log "Ownership set to gonxt:gonxt"
+    
     # Update existing repository
     cd "$NEW_REPO_DIR"
     
@@ -89,6 +94,9 @@ else
         log "ERROR: $NEW_REPO_DIR is not a git repository"
         exit 1
     fi
+    
+    # Add as safe directory for git
+    git config --global --add safe.directory "$NEW_REPO_DIR" 2>/dev/null || true
     
     # Stash any local changes
     log "Stashing local changes..."
@@ -105,8 +113,8 @@ else
     log "Update completed successfully"
 fi
 
-# Fix ownership and permissions
-log "Fixing ownership and permissions..."
+# Ensure ownership is correct after all operations
+log "Ensuring correct ownership..."
 sudo chown -R gonxt:gonxt "$NEW_REPO_DIR"
 sudo chmod +x "$NEW_REPO_DIR/$VENV_DIR/bin/activate" 2>/dev/null || true
 log "Ownership set to gonxt:gonxt"
