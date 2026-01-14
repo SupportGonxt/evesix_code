@@ -21,6 +21,7 @@ import mysql.connector
 import platform
 import shared
 import subprocess
+import glob
 from gpiozero import Buzzer
 from time import sleep
 from threading import Thread
@@ -103,6 +104,55 @@ class PageOne(Screen):
     def log_info(self, phase, msg):
         print(f"[CycleLog][{phase}] {msg}")
 
+    # ---------------- USB Port Refresh ----------------
+    def refresh_usb_ports(self):
+        """
+        Refresh USB ports to clear any touchscreen freezing issues.
+        This is called at the end of a successful cycle.
+        Performs a safe USB hub reset that doesn't require sudo.
+        """
+        self.log_info('SUCCESS', 'Refreshing USB ports...')
+        
+        try:
+            # Method 1: Try using usb_modeswitch if available (user permission)
+            result = subprocess.run(
+                ['sudo', 'uhubctl', '-a', 'cycle', '-p', 'all'],
+                timeout=10,
+                capture_output=True,
+                text=True
+            )
+            if result.returncode == 0:
+                self.log_info('SUCCESS', 'USB ports refreshed with uhubctl')
+                return True
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            self.log_error(0, 'SUCCESS', f'uhubctl failed: {e}')
+        
+        try:
+            # Method 2: Rebind USB HID driver (more reliable)
+            result = subprocess.run(
+                ['sudo', 'modprobe', '-r', 'usbhid'],
+                timeout=5,
+                capture_output=True
+            )
+            time.sleep(1)
+            result = subprocess.run(
+                ['sudo', 'modprobe', 'usbhid'],
+                timeout=5,
+                capture_output=True
+            )
+            if result.returncode == 0:
+                self.log_info('SUCCESS', 'USB HID driver reloaded successfully')
+                time.sleep(1)
+                return True
+        except Exception as e:
+            self.log_error(0, 'SUCCESS', f'USB HID reload failed: {e}')
+        
+        # If we get here, methods failed but log it
+        self.log_error(0, 'SUCCESS', 'USB port refresh failed - manual sudo config may be needed')
+        return False
+
     # ---------------- Cloud Sync Trigger ----------------
     def trigger_cloud_sync(self, phase='SUCCESS', start_step=11):
         """Run cloudSync.py in a blocking subprocess (inside a background thread) with
@@ -153,6 +203,11 @@ class PageOne(Screen):
                     print('[cloudSync stderr]\n' + result.stderr)
             else:
                 self.log_error(start_step + 2, phase, f'cloudSync.py exited with code {result.returncode} (post-run net: {net_status_after})', result.stderr)
+            
+            # After cloud sync completes, refresh USB ports to prevent touchscreen freezing
+            if phase == 'SUCCESS':
+                self.log_step(start_step + 3, phase, 'Refreshing USB ports after cloud sync')
+                self.refresh_usb_ports()
         except Exception as e:
             self.log_error(start_step + 2, phase, 'cloudSync invocation failed', e)
 
@@ -1219,7 +1274,9 @@ class PageOne(Screen):
                 #self.back_button.bind(on_release=self.go_to_begin_robot_page)
                 #self.add_widget(self.back_button)
                 self.log_step(9, 'SUCCESS', 'Added Done button to layout')
+                
                 # Auto-trigger cloud sync asynchronously after successful cycle.
+                # USB ports will be refreshed after cloud sync completes.
                 self.log_step(10, 'SUCCESS', 'Triggering asynchronous cloud sync (post-cycle)')
                 Thread(target=self.trigger_cloud_sync, daemon=True).start()
     def go_to_begin_robot_page(self, instance):

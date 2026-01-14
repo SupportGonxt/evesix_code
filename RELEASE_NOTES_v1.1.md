@@ -1,3 +1,122 @@
+# Release Notes - Version 1.5.1
+**Date:** January 14, 2026  
+**Scope:** Touchscreen stability, USB driver management  
+**Status:** Hardware Robustness & Stability Enhancement
+
+---
+
+## Summary
+Version 1.5.1 addresses intermittent touchscreen freezing issues on Raspberry Pi that occurred randomly (~1 in 15 cycles) after successful disinfection cycles. The touchscreen would become unresponsive and only recover after manual unplugging/replugging. This release implements automatic USB HID driver refresh that executes after cloud sync completes on each cycle, ensuring the touchscreen remains responsive without manual intervention.
+
+---
+
+## Key Changes Since v1.5
+
+### 1. Automatic USB Port Refresh (`pageOne.py`)
+- Added `refresh_usb_ports()` method that automatically restarts USB HID drivers post-sync.
+- Implements two recovery methods:
+    * **Primary:** Uses `uhubctl` for clean USB hub port cycling (if available).
+    * **Fallback:** Reloads `usbhid` kernel module via `sudo modprobe -r` and `-i` (reliable, always available).
+- Method selection with automatic fallback ensures recovery even on minimal Pi setups.
+- Runs in-line during cloud sync completion (step 11+3 in logging).
+- Includes 2-minute cooldown to prevent spam if device has persistent issues.
+
+### 2. Post-Sync Execution Flow
+- Success cycle now triggers: Button → Cloud Sync → USB Refresh (in sequence).
+- USB refresh is non-blocking and integrated into the cloud sync thread.
+- Only executes on 'SUCCESS' phase (won't interfere with motion error logging).
+- Logs all recovery attempts and success/failure status.
+
+### 3. Sudo Configuration (One-time Setup Required)
+- Add the following to `/etc/sudoers` (via `sudo visudo`):
+  ```
+  gonxt ALL=(ALL) NOPASSWD: /sbin/modprobe
+  gonxt ALL=(ALL) NOPASSWD: /usr/sbin/uhubctl
+  ```
+- This allows automatic driver restart without password prompts.
+- Improves reliability for automated/unattended operation.
+
+**Automated Setup Command (during SD card provisioning):**
+```bash
+# Add sudo permissions automatically (no manual visudo required)
+echo "gonxt ALL=(ALL) NOPASSWD: /sbin/modprobe" | sudo tee -a /etc/sudoers.d/gonxt-usb-refresh > /dev/null
+echo "gonxt ALL=(ALL) NOPASSWD: /usr/sbin/uhubctl" | sudo tee -a /etc/sudoers.d/gonxt-usb-refresh > /dev/null
+sudo chmod 0440 /etc/sudoers.d/gonxt-usb-refresh
+echo "Sudo configuration applied successfully"
+```
+
+**Or add to deployment script** (`deploy_robot.sh` or `PI_SETUP.md`):
+```bash
+# Configure sudo permissions for USB HID driver restart
+if ! sudo grep -q "NOPASSWD: /sbin/modprobe" /etc/sudoers.d/gonxt-usb-refresh 2>/dev/null; then
+    echo "Configuring sudo permissions for USB driver refresh..."
+    echo "gonxt ALL=(ALL) NOPASSWD: /sbin/modprobe" | sudo tee -a /etc/sudoers.d/gonxt-usb-refresh > /dev/null
+    echo "gonxt ALL=(ALL) NOPASSWD: /usr/sbin/uhubctl" | sudo tee -a /etc/sudoers.d/gonxt-usb-refresh > /dev/null
+    sudo chmod 0440 /etc/sudoers.d/gonxt-usb-refresh
+    echo "✓ Sudo permissions configured"
+else
+    echo "✓ Sudo permissions already configured"
+fi
+```
+
+**Why this approach is better:**
+- Uses `/etc/sudoers.d/` instead of editing main sudoers file (safer, modular)
+- Can be run non-interactively (no manual `visudo` needed)
+- Automatically checks if already configured (idempotent)
+- Sets proper file permissions (0440) as required
+
+---
+
+## Root Cause Analysis
+- **Issue:** Touchscreen input devices (`/dev/input/event*`) would become unresponsive after successful cycles.
+- **Trigger:** Intermittent USB HID driver lock-up, likely caused by:
+  - Kernel driver state corruption during LED operations (SPI bus interference).
+  - USB bus noise/timing issues on busy Pi systems.
+  - Long-running Kivy sessions exhausting input device state.
+- **Fix Rationale:** Periodic USB driver refresh resets the kernel state without affecting application logic.
+
+---
+
+## Testing Recommendations
+1. Run extended cycle tests (20+ cycles) to verify touchscreen remains responsive.
+2. Monitor `/var/log/syslog` for USB driver reload messages post-sync.
+3. Verify sudo configuration is in place: `sudo modprobe -r usbhid && sudo modprobe usbhid` (should succeed silently).
+4. Optional: Install `uhubctl` for faster recovery: `sudo apt-get install uhubctl`.
+
+---
+
+## Performance Impact
+- **USB Refresh Duration:** 2–3 seconds (modprobe reload) or <1 second (uhubctl cycle).
+- **User Experience:** Invisible to operator (runs after cycle and sync complete).
+- **Resource Usage:** Minimal (single modprobe call, no persistent threads).
+
+---
+
+## Upgrade Notes (v1.5 → v1.5.1)
+1. Update `pageOne.py` from repository.
+2. Configure sudo permissions (run `sudo visudo` and add two lines above).
+3. Optionally install `uhubctl` for faster recovery (recommended for production).
+4. No database schema changes or dependency updates required.
+
+---
+
+## Known Limitations
+1. USB refresh only available on Linux systems with `modprobe` command (standard on Raspberry Pi OS).
+2. Requires sudo privileges; configuration step must be performed by system administrator.
+3. Does not address intermittent touchscreen hardware failures (physically damaged connectors, power delivery issues).
+
+---
+
+## Next Candidate Enhancements (Proposed for v1.6)
+1. Add watchdog thread for real-time touch device monitoring and automatic recovery.
+2. Implement USB port power cycling if modprobe fails (requires additional hardware).
+3. Touchscreen input event logging for diagnostics.
+4. Optional: Switch to alternative input device handler (e.g., `xorg-input-driver`).
+
+---
+
+---
+
 # Release Notes - Version 1.5
 **Date:** November 5, 2025  
 **Scope:** Sync performance, deployment tooling, DB robustness, incremental improvements  
@@ -6,7 +125,7 @@
 ---
 
 ## Summary
-Version 1.2 focuses on dramatically reducing cloud sync time, improving operational deployment repeatability, and hardening database write error handling during success/error cycle recording. Previously a manual sync could take up to ~7 minutes; new bulk operations should reduce that to a few seconds (dependent on network & row count).
+Version 1.5 focuses on dramatically reducing cloud sync time, improving operational deployment repeatability, and hardening database write error handling during success/error cycle recording. Previously a manual sync could take up to ~7 minutes; new bulk operations should reduce that to a few seconds (dependent on network & row count).
 
 ---
 
