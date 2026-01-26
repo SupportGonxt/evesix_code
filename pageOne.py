@@ -30,6 +30,7 @@ from kivy.uix.widget import Widget
 from kivy.uix.image import Image
 import sys
 import os
+from version import VERSION
 
 
 
@@ -247,6 +248,16 @@ class PageOne(Screen):
         )
         begin_label.bind(on_release=self.show_hospital_selection)
         self.main_layout.add_widget(begin_label)
+        
+        # Add version label at the bottom
+        version_label = Label(
+            text=f"Version: {VERSION}",
+            font_size=20,
+            color=(0, 153/255, 1, 1),
+            size_hint=(1, 0.1),
+            halign='center'
+        )
+        self.main_layout.add_widget(version_label)
 
     #def submitVali(self, instance):
         #if self.hospital_button.text == 'Select a ward number':  
