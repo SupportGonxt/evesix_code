@@ -92,7 +92,8 @@ class PageOne(Screen):
         self.CLOUD_SYNC_PATH = '/home/gonxt/evesix_code/cloudSync.py'
         
         # Check for incomplete emergency shutoff records and complete them
-        self.complete_pending_shutoff_records()
+        # Schedule this to run after a short delay to ensure everything is initialized
+        Clock.schedule_once(lambda dt: self.complete_pending_shutoff_records(), 2)
 
 
     # ---------------- Logging Helpers ----------------
@@ -108,15 +109,25 @@ class PageOne(Screen):
     def log_info(self, phase, msg):
         print(f"[CycleLog][{phase}] {msg}")
 
-    # ---------------- Emergency Shutoff Recovery ----------------
-    def complete_pending_shutoff_records(self):
+    # ---------------- Save Start Record ----------------
+    def save_start_record(self):
         """
-        Check for emergency shutoff records without end_time and complete them.
-        This runs when the machine starts up.
+        Save the start record to database immediately when cycle begins.
+        End_date is NULL - will be updated when cycle completes or on restart.
         """
+        print("\n" + "="*60)
+        print("[START RECORD] Saving cycle start to database...")
+        print("="*60)
         try:
             host_N = platform.node()
-            current_time = time.localtime()
+            opID = shared.get_operatorId()
+            bed_id = shared.get_bedId()
+            
+            print(f"[START] Machine: {host_N}")
+            print(f"[START] Start Time: {time.strftime('%Y-%m-%d %H:%M:%S', self.start_time)}")
+            print(f"[START] Operator ID: {opID}")
+            print(f"[START] Bed ID: {bed_id}")
+            print(f"[START] Side: {self.side_selected}")
             
             mydb = mysql.connector.connect(
                 host="localhost",
@@ -125,25 +136,83 @@ class PageOne(Screen):
                 database="robotdb"
             )
             mycursor = mydb.cursor()
+            print("[START] Database connected")
+            
+            # Insert record with NULL End_date
+            sql = """
+            INSERT INTO device_data (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side)
+            VALUES (CONCAT(%s, ' ', %s), %s, %s, NULL, %s, %s, %s, %s, %s)
+            """
+            values = (host_N, self.start_time, host_N, self.start_time, 'in_progress', 'cycle_started', opID, bed_id, self.side_selected)
+            mycursor.execute(sql, values)
+            mydb.commit()
+            
+            # Store the record ID for later update
+            self.current_record_id = mycursor.lastrowid
+            print(f"[START] ✓ Start record saved (ID: {self.current_record_id})")
+            print(f"[START] End_date is NULL - will be updated when cycle completes")
+            
+            mycursor.close()
+            mydb.close()
+            print("="*60 + "\n")
+            
+        except Exception as e:
+            print(f"[START] ✗ ERROR saving start record: {e}")
+            import traceback
+            print(f"[START] Traceback:\n{traceback.format_exc()}")
+            print("="*60 + "\n")
+
+    # ---------------- Emergency Shutoff Recovery ----------------
+    def complete_pending_shutoff_records(self):
+        """
+        Check for emergency shutoff records without end_time and complete them.
+        This runs when the machine starts up.
+        """
+        print("="*60)
+        print("[EMERGENCY SHUTOFF RECOVERY] Starting check...")
+        print("="*60)
+        try:
+            host_N = platform.node()
+            current_time = time.localtime()
+            print(f"[RECOVERY] Machine Serial: {host_N}")
+            print(f"[RECOVERY] Current Time: {time.strftime('%Y-%m-%d %H:%M:%S', current_time)}")
+            
+            mydb = mysql.connector.connect(
+                host="localhost",
+                user="root",
+                password="Robot123#",
+                database="robotdb"
+            )
+            mycursor = mydb.cursor()
+            print("[RECOVERY] Database connection established")
             
             # Find records with NULL end_time for this machine (emergency shutoffs)
-            sql = "SELECT Start_date, Operator_Id, Bed_Id, Side FROM device_data WHERE Serial = %s AND End_date IS NULL AND Code = 'emergency shutoff' ORDER BY Start_date DESC"
+            sql = "SELECT id, Start_date, Operator_Id, Bed_Id, Side FROM device_data WHERE Serial = %s AND End_date IS NULL AND Code = 'cycle_started' ORDER BY Start_date DESC"
             mycursor.execute(sql, (host_N,))
             pending_records = mycursor.fetchall()
+            print(f"[RECOVERY] Query executed. Found {len(pending_records) if pending_records else 0} records")
             
             if pending_records:
-                print(f"Found {len(pending_records)} pending emergency shutoff record(s)")
+                print(f"\n[RECOVERY] *** FOUND {len(pending_records)} PENDING EMERGENCY SHUTOFF RECORD(S) ***")
                 
-                for record in pending_records:
-                    start_date, op_id, bed_id, side = record
+                for idx, record in enumerate(pending_records, 1):
+                    record_id, start_date, op_id, bed_id, side = record
+                    print(f"\n[RECOVERY] Processing record {idx}/{len(pending_records)}:")
+                    print(f"  - Record ID: {record_id}")
+                    print(f"  - Start Date: {start_date}")
+                    print(f"  - Operator ID: {op_id}")
+                    print(f"  - Bed ID: {bed_id}")
+                    print(f"  - Side: {side}")
                     
-                    # Update the record with current time as end_time
+                    # Update the record with current time as end_time and mark as emergency shutoff
                     update_sql = """
                     UPDATE device_data 
-                    SET End_date = %s, D_Number = CONCAT(%s, ' ', %s)
-                    WHERE Serial = %s AND Start_date = %s AND End_date IS NULL AND Code = 'emergency shutoff'
+                    SET End_date = %s, D_Number = CONCAT(%s, ' ', %s), Diagnostic = 'stopped', Code = 'emergency shutoff'
+                    WHERE id = %s
                     """
-                    mycursor.execute(update_sql, (current_time, host_N, current_time, host_N, start_date))
+                    mycursor.execute(update_sql, (current_time, host_N, current_time, record_id))
+                    print(f"  - Updated End_date to: {time.strftime('%Y-%m-%d %H:%M:%S', current_time)}")
+                    print(f"  - Updated Diagnostic to: 'stopped', Code to: 'emergency shutoff'")
                     
                     # Queue to data_q for cloud sync
                     try:
@@ -151,20 +220,27 @@ class PageOne(Screen):
                                  "VALUES (CONCAT(%s,' ',%s), %s, %s, %s, %s, %s, %s, %s, %s, 'no', NOW())")
                         q_values = (host_N, current_time, host_N, start_date, current_time, 'stopped', 'emergency shutoff', op_id, bed_id, side)
                         mycursor.execute(q_sql, q_values)
-                        print(f"Completed emergency shutoff record: Start={start_date}, End={current_time}")
+                        print(f"  - Queued to data_q for cloud sync")
                     except Exception as e:
-                        print(f"Error queuing completed record to data_q: {e}")
+                        print(f"  - ERROR queuing to data_q: {e}")
                 
                 mydb.commit()
-                print(f"Successfully completed {len(pending_records)} emergency shutoff record(s)")
+                print(f"\n[RECOVERY] ✓ Successfully completed {len(pending_records)} emergency shutoff record(s)")
             else:
-                print("No pending emergency shutoff records found")
+                print("[RECOVERY] No pending emergency shutoff records found")
             
             mycursor.close()
             mydb.close()
+            print("[RECOVERY] Database connection closed")
+            print("="*60)
             
         except Exception as e:
-            print(f"Error completing pending shutoff records: {e}")
+            print(f"\n[RECOVERY] ✗ ERROR completing pending shutoff records:")
+            print(f"[RECOVERY] Error type: {type(e).__name__}")
+            print(f"[RECOVERY] Error message: {e}")
+            import traceback
+            print(f"[RECOVERY] Traceback:\n{traceback.format_exc()}")
+            print("="*60)
 
     # ---------------- USB Port Refresh ----------------
     def refresh_usb_ports(self):
@@ -952,13 +1028,31 @@ class PageOne(Screen):
         
     def stop_countdown(self, instance):
         #self.submit_button.disabled = True
+        print("\n" + "="*60)
+        print("[STOP COUNTDOWN] Button pressed")
+        print("="*60)
+        
         if self.timer_event  is not None:
-            # Record emergency shutoff to database before stopping (without end_time)
+            print("[STOP] Timer event exists, proceeding with stop")
+            
+            # Check if start_time exists
             if hasattr(self, 'start_time'):
+                print(f"[STOP] start_time found: {self.start_time}")
                 try:
                     host_N = platform.node()
                     opID = shared.get_operatorId()
                     reason = "emergency shutoff"
+                    
+                    print(f"[STOP] Machine: {host_N}")
+                    print(f"[STOP] Operator ID: {opID}")
+                    print(f"[STOP] Bed ID: {shared.get_bedId()}")
+                    
+                    # Check if side_selected exists
+                    if hasattr(self, 'side_selected'):
+                        print(f"[STOP] Side: {self.side_selected}")
+                    else:
+                        print("[STOP] WARNING: side_selected not found, using None")
+                        self.side_selected = None
                     
                     self.log_step('STOP', 'EMERGENCY', 'Recording emergency shutoff to database (no end_time yet)')
                     
@@ -966,9 +1060,10 @@ class PageOne(Screen):
                     if hasattr(self, 'h'):
                         lgpio.gpio_write(self.h, 20, True)
                         lgpio.gpiochip_close(self.h)
-                        print("Relay 20 deactivated due to emergency shutoff")
+                        print("[STOP] Relay 20 deactivated due to emergency shutoff")
                     
                     # Save to database without end_time (will be updated when machine restarts)
+                    print("[STOP] Connecting to database...")
                     mydb = mysql.connector.connect(
                         host="localhost",
                         user="root",
@@ -976,23 +1071,31 @@ class PageOne(Screen):
                         database="robotdb"
                     )
                     mycursor = mydb.cursor()
+                    print("[STOP] Database connected")
                     
                     sql = """
                     INSERT INTO device_data (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side)
                     VALUES (CONCAT(%s, ' ', %s), %s, %s, NULL, %s, %s, %s, %s, %s)
                     """
                     values = (host_N, self.start_time, host_N, self.start_time, 'stopped', reason, opID, shared.get_bedId(), self.side_selected)
+                    print(f"[STOP] Executing SQL with values: {values}")
                     mycursor.execute(sql, values)
                     mydb.commit()
+                    print(f"[STOP] Record inserted, rows affected: {mycursor.rowcount}")
                     
                     mycursor.close()
                     mydb.close()
-                    print("Emergency shutoff recorded to database (end_time will be set on restart)")
+                    print("[STOP] ✓ Emergency shutoff recorded to database (end_time will be set on restart)")
                     self.log_step('STOP', 'EMERGENCY', 'Database record saved - end_time pending restart')
                     
                 except Exception as e:
-                    print(f"Error recording emergency shutoff: {e}")
+                    print(f"[STOP] ✗ ERROR recording emergency shutoff: {e}")
+                    import traceback
+                    print(f"[STOP] Traceback:\n{traceback.format_exc()}")
                     self.log_error('STOP', 'EMERGENCY', 'Failed to record emergency shutoff', e)
+            else:
+                print("[STOP] WARNING: start_time NOT FOUND - cannot record to database")
+                print("[STOP] This usually means stop was pressed during initial countdown before main cycle started")
             
             self.layout.clear_widgets()
             self.layout.add_widget(self.resume_button)            
@@ -1000,8 +1103,12 @@ class PageOne(Screen):
             self.timer_event  = None
             self.strip.set_all_pixels(Color(0, 255, 0))
             self.strip.show()
+            print("[STOP] Timer stopped, LEDs set to green")
         else:
-            self.countdown_time = self.timer_event 
+            print("[STOP] WARNING: timer_event is None")
+            self.countdown_time = self.timer_event
+        
+        print("="*60 + "\n") 
     
     
     def long_beep(self,duration):
@@ -1105,6 +1212,11 @@ class PageOne(Screen):
         print("RED LED is activated after interval")
         self.start_time = time.localtime()
         print(self.start_time)
+        
+        # *** SAVE START RECORD TO DATABASE IMMEDIATELY ***
+        # This ensures we have a record even if machine is switched off
+        self.save_start_record()
+        
         # Fixed motion detection threshold - 10cm
         self.MOTION_THRESHOLD_CM = 10.0
         self.log_step(1, 'INIT', f'Motion detection threshold set to fixed {self.MOTION_THRESHOLD_CM}cm')
@@ -1223,16 +1335,15 @@ class PageOne(Screen):
                     print("op ID is",opID)
                     #sensor.close()
                     
-                    
+                    # UPDATE existing record instead of INSERT
+                    self.log_step(7, 'MOTION', f'Updating record ID {self.current_record_id} with motion failure')
                     sql = """
-                    INSERT INTO device_data (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side)
-                    VALUES (CONCAT(%s, ' ', %s), %s, %s, %s, %s, %s, %s, %s,%s)
+                    UPDATE device_data 
+                    SET End_date = %s, D_Number = CONCAT(%s, ' ', %s), Diagnostic = %s, Code = %s
+                    WHERE id = %s
                     """
-                    values = (host_N, end_time, host_N, self.start_time, end_time, 'failed', reason, opID, shared.get_bedId(),self.side_selected)
-
+                    values = (end_time, host_N, end_time, 'failed', reason, self.current_record_id)
                     mycursor.execute(sql, values)
-                    
-                    
                     
                     #mycursor.execute('insert into device_data (D_Number,Serial,Start_date,End_date, Diagnostic, Code,Operator_Id,Bed_Id) values (%s,%s,%s,%s,%s,%s,%s,%s)', ( 'CONCAT'(host_N, ' ', start_time),host_N, start_time, end_time, 'ok', reason,opID,shared.get_bedId() ))
                     print("Error Working")
@@ -1328,22 +1439,23 @@ class PageOne(Screen):
                     password="Robot123#",
                     database="robotdb"
                     )
-                self.log_step(5, 'SUCCESS', 'Creating cursor for success record insert')
+                self.log_step(5, 'SUCCESS', 'Creating cursor for success record update')
                 mycursor = mydb.cursor()
                 end_time = time.localtime()
                 
                 opID =shared.get_operatorId()   
                  
 
-    
-
+                # UPDATE existing record instead of INSERT
+                self.log_step(5, 'SUCCESS', f'Updating record ID {self.current_record_id} with success')
                 sql = """
-                INSERT INTO device_data (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side)
-                VALUES (CONCAT(%s, ' ', %s), %s, %s, %s, %s, %s, %s, %s,%s)
+                UPDATE device_data 
+                SET End_date = %s, D_Number = CONCAT(%s, ' ', %s), Diagnostic = %s, Code = %s
+                WHERE id = %s
                 """
-                values = (host_N, end_time, host_N, self.start_time, end_time, 'ok', reason, opID, shared.get_bedId(),self.side_selected)
-
+                values = (end_time, host_N, end_time, 'ok', reason, self.current_record_id)
                 mycursor.execute(sql, values)
+                
                 #mycursor.execute('insert into device_data (D_Number,Serial,Start_date,End_date, Diagnostic, Code,Operator_Id,Bed_Id) values (%s,%s,%s,%s,%s,%s,%s,%s)', ( 'CONCAT'(host_N, '', start_time),host_N, start_time, end_time, 'ok', reason,opID,shared.get_bedId() ))
                 print("Success Working")
                 self.log_step(6, 'SUCCESS', 'Committing success record to DB')
