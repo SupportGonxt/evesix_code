@@ -65,6 +65,32 @@ fi
 - Automatically checks if already configured (idempotent)
 - Sets proper file permissions (0440) as required
 
+### 4. Package Installation (Optional but Recommended)
+Install `uhubctl` for faster USB port recovery (the fallback `modprobe` method is always available):
+
+**Manual Installation:**
+```bash
+sudo apt-get update && sudo apt-get install -y uhubctl
+```
+
+**Automated Installation (add to deployment script):**
+```bash
+# Install uhubctl for faster USB recovery (optional but recommended)
+if ! command -v uhubctl &> /dev/null; then
+    echo "Installing uhubctl for USB port management..."
+    sudo apt-get update
+    sudo apt-get install -y uhubctl
+    echo "✓ uhubctl installed"
+else
+    echo "✓ uhubctl already installed"
+fi
+```
+
+**What it does:**
+- Primary method uses `uhubctl` for faster USB port cycling (<1 second)
+- If `uhubctl` is not available, fallback to `modprobe` method (2–3 seconds)
+- Both methods are fully automatic, no user interaction needed
+
 ---
 
 ## Root Cause Analysis

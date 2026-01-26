@@ -86,6 +86,14 @@ class PageOne(Screen):
 
         self.strip.set_all_pixels(Color(0, 255, 0))
         self.strip.show()
+        
+        # Log sensor configuration change
+        print("="*60)
+        print("[SENSOR CONFIG] Motion detection uses FIXED 10cm threshold")
+        print("[SENSOR CONFIG] No variable distance tracking or baseline updates")
+        print("[SENSOR CONFIG] Any motion detected below 10cm triggers error")
+        print("="*60)
+        
         # Hardcoded absolute path for cloud sync script (robot deployment environment).
         # Adjust if the directory changes on the target device.
         self.CLOUD_SYNC_PATH = '/home/gonxt/evesix_code/cloudSync.py'
@@ -951,7 +959,7 @@ class PageOne(Screen):
             self.countdown_time -= 1
         else:
             Clock.unschedule(self.update_initial_countdown)
-            self.previous_distance = 0
+            # No longer tracking previous_distance - using fixed 10cm threshold
             self.start_ten_minute_countdown()
             # Turn off all LEDs     turn red
             self.strip.set_all_pixels(Color(255, 0, 0))
@@ -992,10 +1000,10 @@ class PageOne(Screen):
         print("RED LED is activated after interval")
         self.start_time = time.localtime()
         print(self.start_time)
-        # Initial distance reading
-        self.previous_distance = sensor.distance * 100
-        print("previous distance")
-        print(self.previous_distance)
+        # Fixed motion detection threshold - 10cm
+        self.MOTION_THRESHOLD_CM = 10.0
+        self.log_step(1, 'INIT', f'Motion detection threshold set to fixed {self.MOTION_THRESHOLD_CM}cm')
+        print(f"Motion detection threshold: {self.MOTION_THRESHOLD_CM}cm")
         # Initialize the relay
         self.h = lgpio.gpiochip_open(0)
         lgpio.gpio_claim_output(self.h, 20)
@@ -1017,54 +1025,56 @@ class PageOne(Screen):
         print("RCWL-0516 Sensor Active")
         host_N = platform.node()
         print(host_N)
-        # Set a threshold for movement detection
-        movement_threshold = int(float(shared.get_threshold()))  # Adjust this value as needed 
+        # Fixed 10cm motion detection threshold
+        # No longer using variable distance or baseline tracking
         
 
 # Initialize detect variable        
         if self.countdown_time > 0:
-                # During warm-up, skip motion detection but continue countdown and baseline update
+                # During warm-up, skip motion detection but continue countdown
                 if hasattr(self, 'motion_detection_enabled_at') and time.time() < self.motion_detection_enabled_at:
                     try:
-                        self.log_step(2, 'WARMUP', 'Reading sensor distance during warm-up')
+                        self.log_step(2, 'WARMUP', 'Sensor warmup period - motion detection disabled')
                         current_distance = sensor.distance * 100
-                        self.previous_distance = current_distance
+                        self.log_step(2, 'WARMUP', f'Current distance reading: {current_distance:.2f}cm (monitoring only)')
                     except Exception as e:
-                        self.log_error(2, 'WARMUP', 'Sensor read failed (using previous distance)', e)
+                        self.log_error(2, 'WARMUP', 'Sensor read failed during warmup', e)
                         print(f"Sensor read error during warmup: {e}")
-                        current_distance = self.previous_distance
                     minutes, seconds = divmod(self.countdown_time, 60)
                     self.countdown_label.text = f"{minutes:02}:{seconds:02}"
                     self.countdown_time -= 1
                     return
                 
                 try:
-                    self.log_step(3, 'CYCLE', 'Reading sensor distance')
+                    self.log_step(3, 'CYCLE', 'Reading sensor distance for motion detection')
                     current_distance = sensor.distance * 100
+                    self.log_step(3, 'CYCLE', f'Current distance: {current_distance:.2f}cm | Threshold: {self.MOTION_THRESHOLD_CM}cm')
                 except Exception as e:
-                    self.log_error(3, 'CYCLE', 'Sensor read failed (using previous distance)', e)
+                    self.log_error(3, 'CYCLE', 'Sensor read failed - skipping this cycle', e)
                     print(f"Sensor read error: {e}")
-                    current_distance = self.previous_distance  # Use last known good value
-                print("current distance")
-                print(current_distance)
-                print(self.countdown_time)
-                print("previous distance")
-                print(self.previous_distance)
-                print("Threshold")
-                print(self.previous_distance - movement_threshold)
-                if  current_distance < self.previous_distance - movement_threshold or current_distance > self.previous_distance + movement_threshold:
-                    print("in motion loop")
-                    self.log_step(4, 'MOTION', 'Motion threshold exceeded - entering motion handling branch')
-                    
-                    self.previous_distance = current_distance
+                    # Skip this cycle and continue countdown
                     minutes, seconds = divmod(self.countdown_time, 60)
                     self.countdown_label.text = f"{minutes:02}:{seconds:02}"
                     self.countdown_time -= 1
+                    return
+                print("current distance")
+                print(current_distance)
+                print(self.countdown_time)
+                print("Motion Threshold (Fixed)")
+                print(self.MOTION_THRESHOLD_CM)
+                # Check if any motion detected below 10cm threshold
+                if current_distance < self.MOTION_THRESHOLD_CM:
+                    print("in motion loop")
+                    self.log_step(4, 'MOTION', f'MOTION DETECTED! Distance {current_distance:.2f}cm is below {self.MOTION_THRESHOLD_CM}cm threshold')
+                    
+                    # Motion detected - no baseline tracking needed with fixed threshold
+                    minutes, seconds = divmod(self.countdown_time, 60)
+                    self.log_step(4, 'MOTION', f'Countdown was at {minutes:02}:{seconds:02} when motion detected')
                     self.countdown_label.text = "Error: Motion Detected"
                     self.countdown_label.font_size = '35pt'
                     end_time = time.localtime()
-                    reason = "Error: Motion Detected"
-                    current_distance=0
+                    reason = f"Error: Motion Detected at {current_distance:.2f}cm (threshold: {self.MOTION_THRESHOLD_CM}cm)"
+                    self.log_step(4, 'MOTION', f'Reason logged: {reason}')
                     
                     print(reason)  
                     print (end_time)
@@ -1160,8 +1170,8 @@ class PageOne(Screen):
                     return  # Exit after handling motion detection to prevent further execution
                 else:   
                     print("in else - no motion detected")
-                    self.log_step(4, 'CYCLE', 'No motion detected - updating baseline and continuing countdown')
-                    self.previous_distance = current_distance  # Update baseline for next check
+                    self.log_step(4, 'CYCLE', f'No motion detected - distance {current_distance:.2f}cm is above {self.MOTION_THRESHOLD_CM}cm threshold')
+                    # No baseline tracking needed - just continue countdown
                     minutes, seconds = divmod(self.countdown_time, 60)
                     self.countdown_label.text = f"{minutes:02}:{seconds:02}"
                     print(f"Countdown: {minutes:02}:{seconds:02} ({self.countdown_time} seconds remaining)")

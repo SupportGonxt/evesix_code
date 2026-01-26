@@ -27,7 +27,7 @@ import os
 try:
     from version import VERSION
 except Exception:
-    VERSION = "v1.5"  # fallback if version module missing
+    VERSION = "v1.5.1"  # fallback if version module missing
 
 class SplashScreen(Screen):
     def __init__(self, **kwargs):
@@ -73,7 +73,7 @@ class Dashboard(BoxLayout):
         try:
             from version import VERSION as _DASH_VERSION
         except Exception:
-            _DASH_VERSION = "v1.5"
+            _DASH_VERSION = "v1.5.1"
         ver_label = Label(text=f"[color=888888]{_DASH_VERSION}[/color]",
                           markup=True,
                           size_hint=(None, None),
