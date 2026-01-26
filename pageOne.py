@@ -113,7 +113,7 @@ class PageOne(Screen):
     def save_start_record(self):
         """
         Save the start record to database immediately when cycle begins.
-        End_date is NULL - will be updated when cycle completes or on restart.
+        End_date is NULL - will be updated on restart if machine is switched off.
         """
         print("\n" + "="*60)
         print("[START RECORD] Saving cycle start to database...")
@@ -147,10 +147,8 @@ class PageOne(Screen):
             mycursor.execute(sql, values)
             mydb.commit()
             
-            # Store the record ID for later update
-            self.current_record_id = mycursor.lastrowid
-            print(f"[START] ✓ Start record saved (ID: {self.current_record_id})")
-            print(f"[START] End_date is NULL - will be updated when cycle completes")
+            print(f"[START] ✓ Start record saved")
+            print(f"[START] End_date is NULL - will be completed on restart if power loss occurs")
             
             mycursor.close()
             mydb.close()
@@ -186,8 +184,8 @@ class PageOne(Screen):
             mycursor = mydb.cursor()
             print("[RECOVERY] Database connection established")
             
-            # Find records with NULL end_time for this machine (emergency shutoffs)
-            sql = "SELECT id, Start_date, Operator_Id, Bed_Id, Side FROM device_data WHERE Serial = %s AND End_date IS NULL AND Code = 'cycle_started' ORDER BY Start_date DESC"
+            # Find records with NULL end_time for this machine (emergency shutoffs or incomplete cycles)
+            sql = "SELECT Start_date, Operator_Id, Bed_Id, Side, Code FROM device_data WHERE Serial = %s AND End_date IS NULL AND (Code = 'Emergency Shutoff' OR Code = 'cycle_started') ORDER BY Start_date DESC"
             mycursor.execute(sql, (host_N,))
             pending_records = mycursor.fetchall()
             print(f"[RECOVERY] Query executed. Found {len(pending_records) if pending_records else 0} records")
@@ -196,29 +194,36 @@ class PageOne(Screen):
                 print(f"\n[RECOVERY] *** FOUND {len(pending_records)} PENDING EMERGENCY SHUTOFF RECORD(S) ***")
                 
                 for idx, record in enumerate(pending_records, 1):
-                    record_id, start_date, op_id, bed_id, side = record
+                    start_date, op_id, bed_id, side, code = record
                     print(f"\n[RECOVERY] Processing record {idx}/{len(pending_records)}:")
-                    print(f"  - Record ID: {record_id}")
                     print(f"  - Start Date: {start_date}")
                     print(f"  - Operator ID: {op_id}")
                     print(f"  - Bed ID: {bed_id}")
                     print(f"  - Side: {side}")
+                    print(f"  - Original Code: {code}")
                     
-                    # Update the record with current time as end_time and mark as emergency shutoff
+                    # Calculate end_time as start_date + 1 minute
+                    start_struct = time.struct_time(start_date) if isinstance(start_date, tuple) else start_date
+                    start_seconds = time.mktime(start_struct)
+                    end_seconds = start_seconds + 60  # Add 1 minute
+                    end_time = time.localtime(end_seconds)
+                    print(f"  - Calculated End_date: {time.strftime('%Y-%m-%d %H:%M:%S', end_time)} (start + 1 minute)")
+                    
+                    # Update the record with calculated end_time
                     update_sql = """
                     UPDATE device_data 
-                    SET End_date = %s, D_Number = CONCAT(%s, ' ', %s), Diagnostic = 'stopped', Code = 'emergency shutoff'
-                    WHERE id = %s
+                    SET End_date = %s, D_Number = CONCAT(%s, ' ', %s), Diagnostic = 'stopped', Code = 'Emergency Shutoff'
+                    WHERE Serial = %s AND Start_date = %s AND End_date IS NULL
                     """
-                    mycursor.execute(update_sql, (current_time, host_N, current_time, record_id))
-                    print(f"  - Updated End_date to: {time.strftime('%Y-%m-%d %H:%M:%S', current_time)}")
-                    print(f"  - Updated Diagnostic to: 'stopped', Code to: 'emergency shutoff'")
+                    mycursor.execute(update_sql, (end_time, host_N, end_time, host_N, start_date))
+                    print(f"  - Updated End_date to: {time.strftime('%Y-%m-%d %H:%M:%S', end_time)}")
+                    print(f"  - Updated Code to: 'Emergency Shutoff'")
                     
                     # Queue to data_q for cloud sync
                     try:
                         q_sql = ("INSERT IGNORE INTO data_q (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side, Update_status, Insert_date) "
                                  "VALUES (CONCAT(%s,' ',%s), %s, %s, %s, %s, %s, %s, %s, %s, 'no', NOW())")
-                        q_values = (host_N, current_time, host_N, start_date, current_time, 'stopped', 'emergency shutoff', op_id, bed_id, side)
+                        q_values = (host_N, end_time, host_N, start_date, end_time, 'stopped', 'Emergency Shutoff', op_id, bed_id, side)
                         mycursor.execute(q_sql, q_values)
                         print(f"  - Queued to data_q for cloud sync")
                     except Exception as e:
@@ -1041,7 +1046,7 @@ class PageOne(Screen):
                 try:
                     host_N = platform.node()
                     opID = shared.get_operatorId()
-                    reason = "emergency shutoff"
+                    reason = "Emergency Shutoff"
                     
                     print(f"[STOP] Machine: {host_N}")
                     print(f"[STOP] Operator ID: {opID}")
@@ -1213,8 +1218,7 @@ class PageOne(Screen):
         self.start_time = time.localtime()
         print(self.start_time)
         
-        # *** SAVE START RECORD TO DATABASE IMMEDIATELY ***
-        # This ensures we have a record even if machine is switched off
+        # Save start record to database immediately (in case of power loss)
         self.save_start_record()
         
         # Fixed motion detection threshold - 10cm
@@ -1335,14 +1339,13 @@ class PageOne(Screen):
                     print("op ID is",opID)
                     #sensor.close()
                     
-                    # UPDATE existing record instead of INSERT
-                    self.log_step(7, 'MOTION', f'Updating record ID {self.current_record_id} with motion failure')
+                    
                     sql = """
-                    UPDATE device_data 
-                    SET End_date = %s, D_Number = CONCAT(%s, ' ', %s), Diagnostic = %s, Code = %s
-                    WHERE id = %s
+                    INSERT INTO device_data (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side)
+                    VALUES (CONCAT(%s, ' ', %s), %s, %s, %s, %s, %s, %s, %s,%s)
                     """
-                    values = (end_time, host_N, end_time, 'failed', reason, self.current_record_id)
+                    values = (host_N, end_time, host_N, self.start_time, end_time, 'failed', reason, opID, shared.get_bedId(),self.side_selected)
+
                     mycursor.execute(sql, values)
                     
                     #mycursor.execute('insert into device_data (D_Number,Serial,Start_date,End_date, Diagnostic, Code,Operator_Id,Bed_Id) values (%s,%s,%s,%s,%s,%s,%s,%s)', ( 'CONCAT'(host_N, ' ', start_time),host_N, start_time, end_time, 'ok', reason,opID,shared.get_bedId() ))
@@ -1439,21 +1442,21 @@ class PageOne(Screen):
                     password="Robot123#",
                     database="robotdb"
                     )
-                self.log_step(5, 'SUCCESS', 'Creating cursor for success record update')
+                self.log_step(5, 'SUCCESS', 'Creating cursor for success record insert')
                 mycursor = mydb.cursor()
                 end_time = time.localtime()
                 
                 opID =shared.get_operatorId()   
                  
 
-                # UPDATE existing record instead of INSERT
-                self.log_step(5, 'SUCCESS', f'Updating record ID {self.current_record_id} with success')
+    
+
                 sql = """
-                UPDATE device_data 
-                SET End_date = %s, D_Number = CONCAT(%s, ' ', %s), Diagnostic = %s, Code = %s
-                WHERE id = %s
+                INSERT INTO device_data (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side)
+                VALUES (CONCAT(%s, ' ', %s), %s, %s, %s, %s, %s, %s, %s,%s)
                 """
-                values = (end_time, host_N, end_time, 'ok', reason, self.current_record_id)
+                values = (host_N, end_time, host_N, self.start_time, end_time, 'ok', reason, opID, shared.get_bedId(),self.side_selected)
+
                 mycursor.execute(sql, values)
                 
                 #mycursor.execute('insert into device_data (D_Number,Serial,Start_date,End_date, Diagnostic, Code,Operator_Id,Bed_Id) values (%s,%s,%s,%s,%s,%s,%s,%s)', ( 'CONCAT'(host_N, '', start_time),host_N, start_time, end_time, 'ok', reason,opID,shared.get_bedId() ))
