@@ -90,6 +90,9 @@ class PageOne(Screen):
         # Hardcoded absolute path for cloud sync script (robot deployment environment).
         # Adjust if the directory changes on the target device.
         self.CLOUD_SYNC_PATH = '/home/gonxt/evesix_code/cloudSync.py'
+        
+        # Check for incomplete emergency shutoff records and complete them
+        self.complete_pending_shutoff_records()
 
 
     # ---------------- Logging Helpers ----------------
@@ -104,6 +107,64 @@ class PageOne(Screen):
 
     def log_info(self, phase, msg):
         print(f"[CycleLog][{phase}] {msg}")
+
+    # ---------------- Emergency Shutoff Recovery ----------------
+    def complete_pending_shutoff_records(self):
+        """
+        Check for emergency shutoff records without end_time and complete them.
+        This runs when the machine starts up.
+        """
+        try:
+            host_N = platform.node()
+            current_time = time.localtime()
+            
+            mydb = mysql.connector.connect(
+                host="localhost",
+                user="root",
+                password="Robot123#",
+                database="robotdb"
+            )
+            mycursor = mydb.cursor()
+            
+            # Find records with NULL end_time for this machine (emergency shutoffs)
+            sql = "SELECT Start_date, Operator_Id, Bed_Id, Side FROM device_data WHERE Serial = %s AND End_date IS NULL AND Code = 'emergency shutoff' ORDER BY Start_date DESC"
+            mycursor.execute(sql, (host_N,))
+            pending_records = mycursor.fetchall()
+            
+            if pending_records:
+                print(f"Found {len(pending_records)} pending emergency shutoff record(s)")
+                
+                for record in pending_records:
+                    start_date, op_id, bed_id, side = record
+                    
+                    # Update the record with current time as end_time
+                    update_sql = """
+                    UPDATE device_data 
+                    SET End_date = %s, D_Number = CONCAT(%s, ' ', %s)
+                    WHERE Serial = %s AND Start_date = %s AND End_date IS NULL AND Code = 'emergency shutoff'
+                    """
+                    mycursor.execute(update_sql, (current_time, host_N, current_time, host_N, start_date))
+                    
+                    # Queue to data_q for cloud sync
+                    try:
+                        q_sql = ("INSERT IGNORE INTO data_q (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side, Update_status, Insert_date) "
+                                 "VALUES (CONCAT(%s,' ',%s), %s, %s, %s, %s, %s, %s, %s, %s, 'no', NOW())")
+                        q_values = (host_N, current_time, host_N, start_date, current_time, 'stopped', 'emergency shutoff', op_id, bed_id, side)
+                        mycursor.execute(q_sql, q_values)
+                        print(f"Completed emergency shutoff record: Start={start_date}, End={current_time}")
+                    except Exception as e:
+                        print(f"Error queuing completed record to data_q: {e}")
+                
+                mydb.commit()
+                print(f"Successfully completed {len(pending_records)} emergency shutoff record(s)")
+            else:
+                print("No pending emergency shutoff records found")
+            
+            mycursor.close()
+            mydb.close()
+            
+        except Exception as e:
+            print(f"Error completing pending shutoff records: {e}")
 
     # ---------------- USB Port Refresh ----------------
     def refresh_usb_ports(self):
@@ -892,6 +953,47 @@ class PageOne(Screen):
     def stop_countdown(self, instance):
         #self.submit_button.disabled = True
         if self.timer_event  is not None:
+            # Record emergency shutoff to database before stopping (without end_time)
+            if hasattr(self, 'start_time'):
+                try:
+                    host_N = platform.node()
+                    opID = shared.get_operatorId()
+                    reason = "emergency shutoff"
+                    
+                    self.log_step('STOP', 'EMERGENCY', 'Recording emergency shutoff to database (no end_time yet)')
+                    
+                    # Turn off relay before saving to DB
+                    if hasattr(self, 'h'):
+                        lgpio.gpio_write(self.h, 20, True)
+                        lgpio.gpiochip_close(self.h)
+                        print("Relay 20 deactivated due to emergency shutoff")
+                    
+                    # Save to database without end_time (will be updated when machine restarts)
+                    mydb = mysql.connector.connect(
+                        host="localhost",
+                        user="root",
+                        password="Robot123#",
+                        database="robotdb"
+                    )
+                    mycursor = mydb.cursor()
+                    
+                    sql = """
+                    INSERT INTO device_data (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side)
+                    VALUES (CONCAT(%s, ' ', %s), %s, %s, NULL, %s, %s, %s, %s, %s)
+                    """
+                    values = (host_N, self.start_time, host_N, self.start_time, 'stopped', reason, opID, shared.get_bedId(), self.side_selected)
+                    mycursor.execute(sql, values)
+                    mydb.commit()
+                    
+                    mycursor.close()
+                    mydb.close()
+                    print("Emergency shutoff recorded to database (end_time will be set on restart)")
+                    self.log_step('STOP', 'EMERGENCY', 'Database record saved - end_time pending restart')
+                    
+                except Exception as e:
+                    print(f"Error recording emergency shutoff: {e}")
+                    self.log_error('STOP', 'EMERGENCY', 'Failed to record emergency shutoff', e)
+            
             self.layout.clear_widgets()
             self.layout.add_widget(self.resume_button)            
             self.timer_event.cancel()
