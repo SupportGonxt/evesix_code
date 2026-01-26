@@ -1046,7 +1046,7 @@ class PageOne(Screen):
                 try:
                     host_N = platform.node()
                     opID = shared.get_operatorId()
-                    reason = "Emergency Shutoff"
+                    reason = "emergency shutoff"
                     
                     print(f"[STOP] Machine: {host_N}")
                     print(f"[STOP] Operator ID: {opID}")
