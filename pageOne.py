@@ -87,14 +87,6 @@ class PageOne(Screen):
 
         self.strip.set_all_pixels(Color(0, 255, 0))
         self.strip.show()
-        
-        # Log sensor configuration change
-        print("="*60)
-        print("[SENSOR CONFIG] Motion detection uses FIXED 10cm threshold")
-        print("[SENSOR CONFIG] No variable distance tracking or baseline updates")
-        print("[SENSOR CONFIG] Any motion detected below 10cm triggers error")
-        print("="*60)
-        
         # Hardcoded absolute path for cloud sync script (robot deployment environment).
         # Adjust if the directory changes on the target device.
         self.CLOUD_SYNC_PATH = '/home/gonxt/evesix_code/cloudSync.py'
@@ -1045,9 +1037,14 @@ class PageOne(Screen):
                 # During warm-up, skip motion detection but continue countdown
                 if hasattr(self, 'motion_detection_enabled_at') and time.time() < self.motion_detection_enabled_at:
                     try:
-                        self.log_step(2, 'WARMUP', 'Sensor warmup period - motion detection disabled')
-                        current_distance = sensor.distance * 100
-                        self.log_step(2, 'WARMUP', f'Current distance reading: {current_distance:.2f}cm (monitoring only)')
+                        remaining_warmup = int(self.motion_detection_enabled_at - time.time())
+                        self.log_step(2, 'WARMUP', f'Sensor warmup period - motion detection disabled ({remaining_warmup}s remaining)')
+                        distance_reading = sensor.distance
+                        if distance_reading is None:
+                            current_distance = 0.0
+                        else:
+                            current_distance = distance_reading * 100
+                        self.log_step(2, 'WARMUP', f'Current distance reading: {current_distance:.2f}cm (monitoring only - NOT checking for motion yet)')
                     except Exception as e:
                         self.log_error(2, 'WARMUP', 'Sensor read failed during warmup', e)
                         print(f"Sensor read error during warmup: {e}")
@@ -1058,7 +1055,15 @@ class PageOne(Screen):
                 
                 try:
                     self.log_step(3, 'CYCLE', 'Reading sensor distance for motion detection')
-                    current_distance = sensor.distance * 100
+                    distance_reading = sensor.distance
+                    
+                    # Handle None or very close readings (sensor returns None when object is too close)
+                    if distance_reading is None or distance_reading < 0.02:  # Less than 2cm or None
+                        current_distance = 0.0  # Treat as 0cm - definitely motion detected
+                        self.log_step(3, 'CYCLE', 'Object extremely close or sensor blocked - treating as 0cm')
+                    else:
+                        current_distance = distance_reading * 100
+                    
                     self.log_step(3, 'CYCLE', f'Current distance: {current_distance:.2f}cm | Threshold: {self.MOTION_THRESHOLD_CM}cm')
                 except Exception as e:
                     self.log_error(3, 'CYCLE', 'Sensor read failed - skipping this cycle', e)
