@@ -197,33 +197,60 @@ class PageOne(Screen):
                     start_date, op_id, bed_id, side, code = record
                     print(f"\n[RECOVERY] Processing record {idx}/{len(pending_records)}:")
                     print(f"  - Start Date: {start_date}")
+                    print(f"  - Start Date Type: {type(start_date)}")
                     print(f"  - Operator ID: {op_id}")
                     print(f"  - Bed ID: {bed_id}")
                     print(f"  - Side: {side}")
                     print(f"  - Original Code: {code}")
                     
                     # Calculate end_time as start_date + 1 minute
-                    start_struct = time.struct_time(start_date) if isinstance(start_date, tuple) else start_date
-                    start_seconds = time.mktime(start_struct)
+                    # Handle both datetime objects and time.struct_time
+                    if isinstance(start_date, time.struct_time):
+                        start_seconds = time.mktime(start_date)
+                    elif hasattr(start_date, 'timestamp'):
+                        # It's a datetime object
+                        start_seconds = start_date.timestamp()
+                    else:
+                        # Try to convert to timestamp
+                        start_seconds = time.mktime(start_date)
+                    
                     end_seconds = start_seconds + 60  # Add 1 minute
                     end_time = time.localtime(end_seconds)
-                    print(f"  - Calculated End_date: {time.strftime('%Y-%m-%d %H:%M:%S', end_time)} (start + 1 minute)")
+                    
+                    # Convert end_time to datetime string for MySQL
+                    end_time_str = time.strftime('%Y-%m-%d %H:%M:%S', end_time)
+                    print(f"  - Calculated End_date: {end_time_str} (start + 1 minute)")
                     
                     # Update the record with calculated end_time
+                    # Use the datetime string directly for better compatibility
                     update_sql = """
                     UPDATE device_data 
                     SET End_date = %s, D_Number = CONCAT(%s, ' ', %s), Diagnostic = 'stopped', Code = 'Emergency Shutoff'
                     WHERE Serial = %s AND Start_date = %s AND End_date IS NULL
                     """
-                    mycursor.execute(update_sql, (end_time, host_N, end_time, host_N, start_date))
-                    print(f"  - Updated End_date to: {time.strftime('%Y-%m-%d %H:%M:%S', end_time)}")
-                    print(f"  - Updated Code to: 'Emergency Shutoff'")
+                    mycursor.execute(update_sql, (end_time_str, host_N, end_time_str, host_N, start_date))
+                    rows_affected = mycursor.rowcount
+                    print(f"  - UPDATE executed - Rows affected: {rows_affected}")
+                    
+                    if rows_affected == 0:
+                        print(f"  - ⚠️ WARNING: No rows were updated! Record may not exist or already has End_date")
+                        # Try to debug - check if record still exists
+                        check_sql = "SELECT Start_date, End_date, Code FROM device_data WHERE Serial = %s AND Start_date = %s"
+                        mycursor.execute(check_sql, (host_N, start_date))
+                        check_result = mycursor.fetchone()
+                        if check_result:
+                            print(f"  - Record found: Start={check_result[0]}, End={check_result[1]}, Code={check_result[2]}")
+                        else:
+                            print(f"  - Record NOT found in database!")
+                    else:
+                        print(f"  - ✓ Updated End_date to: {end_time_str}")
+                        print(f"  - ✓ Updated Code to: 'Emergency Shutoff'")
                     
                     # Queue to data_q for cloud sync
                     try:
                         q_sql = ("INSERT IGNORE INTO data_q (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side, Update_status, Insert_date) "
                                  "VALUES (CONCAT(%s,' ',%s), %s, %s, %s, %s, %s, %s, %s, %s, 'no', NOW())")
-                        q_values = (host_N, end_time, host_N, start_date, end_time, 'stopped', 'Emergency Shutoff', op_id, bed_id, side)
+                        q_values = (host_N, end_time_str, host_N, start_date, end_time_str, 'stopped', 'Emergency Shutoff', op_id, bed_id, side)
                         mycursor.execute(q_sql, q_values)
                         print(f"  - Queued to data_q for cloud sync")
                     except Exception as e:
