@@ -277,50 +277,68 @@ class PageOne(Screen):
     # ---------------- USB Port Refresh ----------------
     def refresh_usb_ports(self):
         """
-        Refresh USB ports to clear any touchscreen freezing issues.
+        Refresh USB input devices to clear touchscreen freezing issues.
         This is called at the end of a successful cycle.
-        Performs a safe USB hub reset that doesn't require sudo.
+        Focuses on refreshing input devices (touchscreen/HID) rather than all USB ports.
         """
-        self.log_info('SUCCESS', 'Refreshing USB ports...')
+        self.log_info('SUCCESS', 'Refreshing USB input devices...')
         
         try:
-            # Method 1: Try using usb_modeswitch if available (user permission)
+            # Method 1: Rebind USB input devices directly via /sys/bus/usb/drivers
+            # This is more targeted and less disruptive than full port cycling
             result = subprocess.run(
-                ['sudo', 'uhubctl', '-a', 'cycle', '-p', 'all'],
-                timeout=10,
+                ['bash', '-c', 'for device in /sys/bus/usb/drivers/usb/*/authorized; do echo 0 > "$device" 2>/dev/null; sleep 0.1; echo 1 > "$device" 2>/dev/null; done'],
+                timeout=5,
                 capture_output=True,
                 text=True
             )
             if result.returncode == 0:
-                self.log_info('SUCCESS', 'USB ports refreshed with uhubctl')
+                self.log_info('SUCCESS', 'USB input devices reset via sysfs')
+                time.sleep(0.5)
                 return True
-        except FileNotFoundError:
-            pass
         except Exception as e:
-            self.log_error(0, 'SUCCESS', f'uhubctl failed: {e}')
+            self.log_error(0, 'SUCCESS', f'sysfs reset failed: {e}')
         
         try:
-            # Method 2: Rebind USB HID driver (more reliable)
+            # Method 2: Reload USB HID driver (specifically for touchscreen/input devices)
+            self.log_info('SUCCESS', 'Reloading USB HID driver for input devices...')
             result = subprocess.run(
                 ['sudo', 'modprobe', '-r', 'usbhid'],
                 timeout=5,
-                capture_output=True
+                capture_output=True,
+                text=True
             )
-            time.sleep(1)
+            time.sleep(0.5)
             result = subprocess.run(
                 ['sudo', 'modprobe', 'usbhid'],
                 timeout=5,
-                capture_output=True
+                capture_output=True,
+                text=True
             )
             if result.returncode == 0:
-                self.log_info('SUCCESS', 'USB HID driver reloaded successfully')
-                time.sleep(1)
+                self.log_info('SUCCESS', 'USB HID driver reloaded - input devices refreshed')
+                time.sleep(0.5)
                 return True
         except Exception as e:
             self.log_error(0, 'SUCCESS', f'USB HID reload failed: {e}')
         
+        try:
+            # Method 3: Restart input event devices
+            result = subprocess.run(
+                ['sudo', 'systemctl', 'restart', 'input.target'],
+                timeout=5,
+                capture_output=True,
+                text=True
+            )
+            if result.returncode == 0:
+                self.log_info('SUCCESS', 'Input devices restarted via systemd')
+                time.sleep(0.5)
+                return True
+        except Exception as e:
+            self.log_error(0, 'SUCCESS', f'systemd input restart failed: {e}')
+        
         # If we get here, methods failed but log it
-        self.log_error(0, 'SUCCESS', 'USB port refresh failed - manual sudo config may be needed')
+        self.log_error(0, 'SUCCESS', 'USB input device refresh failed - touchscreen may need manual intervention')
         return False
 
     # ---------------- Cloud Sync Trigger ----------------
