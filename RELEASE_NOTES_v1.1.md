@@ -1,4 +1,4 @@
-# Release Notes - Version 1.5.1
+# Release Notes - Version 1.6
 **Date:** January 14, 2026  
 **Scope:** Touchscreen stability, USB driver management  
 **Status:** Hardware Robustness & Stability Enhancement
@@ -6,7 +6,7 @@
 ---
 
 ## Summary
-Version 1.5.1 addresses intermittent touchscreen freezing issues on Raspberry Pi that occurred randomly (~1 in 15 cycles) after successful disinfection cycles. The touchscreen would become unresponsive and only recover after manual unplugging/replugging. This release implements automatic USB HID driver refresh that executes after cloud sync completes on each cycle, ensuring the touchscreen remains responsive without manual intervention.
+Version 1.6 addresses intermittent touchscreen freezing issues on Raspberry Pi that occurred randomly (~1 in 15 cycles) after successful disinfection cycles. The touchscreen would become unresponsive and only recover after manual unplugging/replugging. This release implements automatic USB HID driver refresh that executes after cloud sync completes on each cycle, ensuring the touchscreen remains responsive without manual intervention.
 
 ---
 
@@ -65,6 +65,32 @@ fi
 - Automatically checks if already configured (idempotent)
 - Sets proper file permissions (0440) as required
 
+### 4. Package Installation (Optional but Recommended)
+Install `uhubctl` for faster USB port recovery (the fallback `modprobe` method is always available):
+
+**Manual Installation:**
+```bash
+sudo apt-get update && sudo apt-get install -y uhubctl
+```
+
+**Automated Installation (add to deployment script):**
+```bash
+# Install uhubctl for faster USB recovery (optional but recommended)
+if ! command -v uhubctl &> /dev/null; then
+    echo "Installing uhubctl for USB port management..."
+    sudo apt-get update
+    sudo apt-get install -y uhubctl
+    echo "✓ uhubctl installed"
+else
+    echo "✓ uhubctl already installed"
+fi
+```
+
+**What it does:**
+- Primary method uses `uhubctl` for faster USB port cycling (<1 second)
+- If `uhubctl` is not available, fallback to `modprobe` method (2–3 seconds)
+- Both methods are fully automatic, no user interaction needed
+
 ---
 
 ## Root Cause Analysis
@@ -92,7 +118,7 @@ fi
 
 ---
 
-## Upgrade Notes (v1.5 → v1.5.1)
+## Upgrade Notes (v1.5 → v1.6)
 1. Update `pageOne.py` from repository.
 2. Configure sudo permissions (run `sudo visudo` and add two lines above).
 3. Optionally install `uhubctl` for faster recovery (recommended for production).

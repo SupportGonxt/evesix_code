@@ -30,6 +30,7 @@ from kivy.uix.widget import Widget
 from kivy.uix.image import Image
 import sys
 import os
+from version import VERSION
 
 
 
@@ -89,6 +90,10 @@ class PageOne(Screen):
         # Hardcoded absolute path for cloud sync script (robot deployment environment).
         # Adjust if the directory changes on the target device.
         self.CLOUD_SYNC_PATH = '/home/gonxt/evesix_code/cloudSync.py'
+        
+        # Check for incomplete emergency shutoff records and complete them
+        # Schedule this to run after a short delay to ensure everything is initialized
+        Clock.schedule_once(lambda dt: self.complete_pending_shutoff_records(), 2)
 
 
     # ---------------- Logging Helpers ----------------
@@ -103,6 +108,171 @@ class PageOne(Screen):
 
     def log_info(self, phase, msg):
         print(f"[CycleLog][{phase}] {msg}")
+
+    # ---------------- Save Start Record ----------------
+    def save_start_record(self):
+        """
+        Save the start record to database immediately when cycle begins.
+        End_date is NULL - will be updated on restart if machine is switched off.
+        """
+        print("\n" + "="*60)
+        print("[START RECORD] Saving cycle start to database...")
+        print("="*60)
+        try:
+            host_N = platform.node()
+            opID = shared.get_operatorId()
+            bed_id = shared.get_bedId()
+            
+            print(f"[START] Machine: {host_N}")
+            print(f"[START] Start Time: {time.strftime('%Y-%m-%d %H:%M:%S', self.start_time)}")
+            print(f"[START] Operator ID: {opID}")
+            print(f"[START] Bed ID: {bed_id}")
+            print(f"[START] Side: {self.side_selected}")
+            
+            mydb = mysql.connector.connect(
+                host="localhost",
+                user="root",
+                password="Robot123#",
+                database="robotdb"
+            )
+            mycursor = mydb.cursor()
+            print("[START] Database connected")
+            
+            # Insert record with NULL End_date
+            sql = """
+            INSERT INTO device_data (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side)
+            VALUES (CONCAT(%s, ' ', %s), %s, %s, NULL, %s, %s, %s, %s, %s)
+            """
+            values = (host_N, self.start_time, host_N, self.start_time, 'in_progress', 'Emergency Stop Activated', opID, bed_id, self.side_selected)
+            mycursor.execute(sql, values)
+            mydb.commit()
+            
+            print(f"[START] ✓ Start record saved")
+            print(f"[START] End_date is NULL - will be completed on restart if power loss occurs")
+            
+            mycursor.close()
+            mydb.close()
+            print("="*60 + "\n")
+            
+        except Exception as e:
+            print(f"[START] ✗ ERROR saving start record: {e}")
+            import traceback
+            print(f"[START] Traceback:\n{traceback.format_exc()}")
+            print("="*60 + "\n")
+
+    # ---------------- Emergency Shutoff Recovery ----------------
+    def complete_pending_shutoff_records(self):
+        """
+        Check for emergency shutoff records without end_time and complete them.
+        This runs when the machine starts up.
+        """
+        print("="*60)
+        print("[EMERGENCY SHUTOFF RECOVERY] Starting check...")
+        print("="*60)
+        try:
+            host_N = platform.node()
+            current_time = time.localtime()
+            print(f"[RECOVERY] Machine Serial: {host_N}")
+            print(f"[RECOVERY] Current Time: {time.strftime('%Y-%m-%d %H:%M:%S', current_time)}")
+            
+            mydb = mysql.connector.connect(
+                host="localhost",
+                user="root",
+                password="Robot123#",
+                database="robotdb"
+            )
+            mycursor = mydb.cursor()
+            print("[RECOVERY] Database connection established")
+            
+            # Find records with NULL end_time for this machine (emergency shutoffs or incomplete cycles)
+            sql = "SELECT Start_date, Operator_Id, Bed_Id, Side, Code FROM device_data WHERE Serial = %s AND End_date IS NULL AND (Code = 'Emergency Shutoff' OR Code = 'Emergency Stop Activated') ORDER BY Start_date DESC"
+            mycursor.execute(sql, (host_N,))
+            pending_records = mycursor.fetchall()
+            print(f"[RECOVERY] Query executed. Found {len(pending_records) if pending_records else 0} records")
+            
+            if pending_records:
+                print(f"\n[RECOVERY] *** FOUND {len(pending_records)} PENDING EMERGENCY SHUTOFF RECORD(S) ***")
+                
+                for idx, record in enumerate(pending_records, 1):
+                    start_date, op_id, bed_id, side, code = record
+                    print(f"\n[RECOVERY] Processing record {idx}/{len(pending_records)}:")
+                    print(f"  - Start Date: {start_date}")
+                    print(f"  - Start Date Type: {type(start_date)}")
+                    print(f"  - Operator ID: {op_id}")
+                    print(f"  - Bed ID: {bed_id}")
+                    print(f"  - Side: {side}")
+                    print(f"  - Original Code: {code}")
+                    
+                    # Calculate end_time as start_date + 1 minute
+                    # Handle both datetime objects and time.struct_time
+                    if isinstance(start_date, time.struct_time):
+                        start_seconds = time.mktime(start_date)
+                    elif hasattr(start_date, 'timestamp'):
+                        # It's a datetime object
+                        start_seconds = start_date.timestamp()
+                    else:
+                        # Try to convert to timestamp
+                        start_seconds = time.mktime(start_date)
+                    
+                    end_seconds = start_seconds + 60  # Add 1 minute
+                    end_time = time.localtime(end_seconds)
+                    
+                    # Convert end_time to datetime string for MySQL
+                    end_time_str = time.strftime('%Y-%m-%d %H:%M:%S', end_time)
+                    print(f"  - Calculated End_date: {end_time_str} (start + 1 minute)")
+                    
+                    # Update the record with calculated end_time
+                    # Use the datetime string directly for better compatibility
+                    update_sql = """
+                    UPDATE device_data 
+                    SET End_date = %s, D_Number = CONCAT(%s, ' ', %s), Diagnostic = 'stopped', Code = 'Emergency Shutoff'
+                    WHERE Serial = %s AND Start_date = %s AND End_date IS NULL
+                    """
+                    mycursor.execute(update_sql, (end_time_str, host_N, end_time_str, host_N, start_date))
+                    rows_affected = mycursor.rowcount
+                    print(f"  - UPDATE executed - Rows affected: {rows_affected}")
+                    
+                    if rows_affected == 0:
+                        print(f"  - ⚠️ WARNING: No rows were updated! Record may not exist or already has End_date")
+                        # Try to debug - check if record still exists
+                        check_sql = "SELECT Start_date, End_date, Code FROM device_data WHERE Serial = %s AND Start_date = %s"
+                        mycursor.execute(check_sql, (host_N, start_date))
+                        check_result = mycursor.fetchone()
+                        if check_result:
+                            print(f"  - Record found: Start={check_result[0]}, End={check_result[1]}, Code={check_result[2]}")
+                        else:
+                            print(f"  - Record NOT found in database!")
+                    else:
+                        print(f"  - ✓ Updated End_date to: {end_time_str}")
+                        print(f"  - ✓ Updated Code to: 'Emergency Shutoff'")
+                    
+                    # Queue to data_q for cloud sync
+                    try:
+                        q_sql = ("INSERT IGNORE INTO data_q (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side, Update_status, Insert_date) "
+                                 "VALUES (CONCAT(%s,' ',%s), %s, %s, %s, %s, %s, %s, %s, %s, 'no', NOW())")
+                        q_values = (host_N, end_time_str, host_N, start_date, end_time_str, 'stopped', 'Emergency Shutoff', op_id, bed_id, side)
+                        mycursor.execute(q_sql, q_values)
+                        print(f"  - Queued to data_q for cloud sync")
+                    except Exception as e:
+                        print(f"  - ERROR queuing to data_q: {e}")
+                
+                mydb.commit()
+                print(f"\n[RECOVERY] ✓ Successfully completed {len(pending_records)} emergency shutoff record(s)")
+            else:
+                print("[RECOVERY] No pending emergency shutoff records found")
+            
+            mycursor.close()
+            mydb.close()
+            print("[RECOVERY] Database connection closed")
+            print("="*60)
+            
+        except Exception as e:
+            print(f"\n[RECOVERY] ✗ ERROR completing pending shutoff records:")
+            print(f"[RECOVERY] Error type: {type(e).__name__}")
+            print(f"[RECOVERY] Error message: {e}")
+            import traceback
+            print(f"[RECOVERY] Traceback:\n{traceback.format_exc()}")
+            print("="*60)
 
     # ---------------- USB Port Refresh ----------------
     def refresh_usb_ports(self):
@@ -239,6 +409,16 @@ class PageOne(Screen):
         )
         begin_label.bind(on_release=self.show_hospital_selection)
         self.main_layout.add_widget(begin_label)
+        
+        # Add version label at the bottom
+        version_label = Label(
+            text=f"Version: {VERSION}",
+            font_size=20,
+            color=(0, 153/255, 1, 1),
+            size_hint=(1, 0.1),
+            halign='center'
+        )
+        self.main_layout.add_widget(version_label)
 
     #def submitVali(self, instance):
         #if self.hospital_button.text == 'Select a ward number':  
@@ -880,15 +1060,87 @@ class PageOne(Screen):
         
     def stop_countdown(self, instance):
         #self.submit_button.disabled = True
+        print("\n" + "="*60)
+        print("[STOP COUNTDOWN] Button pressed")
+        print("="*60)
+        
         if self.timer_event  is not None:
+            print("[STOP] Timer event exists, proceeding with stop")
+            
+            # Check if start_time exists
+            if hasattr(self, 'start_time'):
+                print(f"[STOP] start_time found: {self.start_time}")
+                try:
+                    host_N = platform.node()
+                    opID = shared.get_operatorId()
+                    reason = "emergency shutoff"
+                    
+                    print(f"[STOP] Machine: {host_N}")
+                    print(f"[STOP] Operator ID: {opID}")
+                    print(f"[STOP] Bed ID: {shared.get_bedId()}")
+                    
+                    # Check if side_selected exists
+                    if hasattr(self, 'side_selected'):
+                        print(f"[STOP] Side: {self.side_selected}")
+                    else:
+                        print("[STOP] WARNING: side_selected not found, using None")
+                        self.side_selected = None
+                    
+                    self.log_step('STOP', 'EMERGENCY', 'Recording emergency shutoff to database (no end_time yet)')
+                    
+                    # Turn off relay before saving to DB
+                    if hasattr(self, 'h'):
+                        lgpio.gpio_write(self.h, 20, True)
+                        lgpio.gpiochip_close(self.h)
+                        print("[STOP] Relay 20 deactivated due to emergency shutoff")
+                    
+                    # Save to database without end_time (will be updated when machine restarts)
+                    print("[STOP] Connecting to database...")
+                    mydb = mysql.connector.connect(
+                        host="localhost",
+                        user="root",
+                        password="Robot123#",
+                        database="robotdb"
+                    )
+                    mycursor = mydb.cursor()
+                    print("[STOP] Database connected")
+                    
+                    sql = """
+                    INSERT INTO device_data (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side)
+                    VALUES (CONCAT(%s, ' ', %s), %s, %s, NULL, %s, %s, %s, %s, %s)
+                    """
+                    values = (host_N, self.start_time, host_N, self.start_time, 'stopped', reason, opID, shared.get_bedId(), self.side_selected)
+                    print(f"[STOP] Executing SQL with values: {values}")
+                    mycursor.execute(sql, values)
+                    mydb.commit()
+                    print(f"[STOP] Record inserted, rows affected: {mycursor.rowcount}")
+                    
+                    mycursor.close()
+                    mydb.close()
+                    print("[STOP] ✓ Emergency shutoff recorded to database (end_time will be set on restart)")
+                    self.log_step('STOP', 'EMERGENCY', 'Database record saved - end_time pending restart')
+                    
+                except Exception as e:
+                    print(f"[STOP] ✗ ERROR recording emergency shutoff: {e}")
+                    import traceback
+                    print(f"[STOP] Traceback:\n{traceback.format_exc()}")
+                    self.log_error('STOP', 'EMERGENCY', 'Failed to record emergency shutoff', e)
+            else:
+                print("[STOP] WARNING: start_time NOT FOUND - cannot record to database")
+                print("[STOP] This usually means stop was pressed during initial countdown before main cycle started")
+            
             self.layout.clear_widgets()
             self.layout.add_widget(self.resume_button)            
             self.timer_event.cancel()
             self.timer_event  = None
             self.strip.set_all_pixels(Color(0, 255, 0))
             self.strip.show()
+            print("[STOP] Timer stopped, LEDs set to green")
         else:
-            self.countdown_time = self.timer_event 
+            print("[STOP] WARNING: timer_event is None")
+            self.countdown_time = self.timer_event
+        
+        print("="*60 + "\n") 
     
     
     def long_beep(self,duration):
@@ -951,7 +1203,7 @@ class PageOne(Screen):
             self.countdown_time -= 1
         else:
             Clock.unschedule(self.update_initial_countdown)
-            self.previous_distance = 0
+            # No longer tracking previous_distance - using fixed 10cm threshold
             self.start_ten_minute_countdown()
             # Turn off all LEDs     turn red
             self.strip.set_all_pixels(Color(255, 0, 0))
@@ -992,10 +1244,14 @@ class PageOne(Screen):
         print("RED LED is activated after interval")
         self.start_time = time.localtime()
         print(self.start_time)
-        # Initial distance reading
-        self.previous_distance = sensor.distance * 100
-        print("previous distance")
-        print(self.previous_distance)
+        
+        # Save start record to database immediately (in case of power loss)
+        self.save_start_record()
+        
+        # Fixed motion detection threshold - 10cm
+        self.MOTION_THRESHOLD_CM = 10.0
+        self.log_step(1, 'INIT', f'Motion detection threshold set to fixed {self.MOTION_THRESHOLD_CM}cm')
+        print(f"Motion detection threshold: {self.MOTION_THRESHOLD_CM}cm")
         # Initialize the relay
         self.h = lgpio.gpiochip_open(0)
         lgpio.gpio_claim_output(self.h, 20)
@@ -1017,54 +1273,69 @@ class PageOne(Screen):
         print("RCWL-0516 Sensor Active")
         host_N = platform.node()
         print(host_N)
-        # Set a threshold for movement detection
-        movement_threshold = int(float(shared.get_threshold()))  # Adjust this value as needed 
+        # Fixed 10cm motion detection threshold
+        # No longer using variable distance or baseline tracking
         
 
 # Initialize detect variable        
         if self.countdown_time > 0:
-                # During warm-up, skip motion detection but continue countdown and baseline update
+                # During warm-up, skip motion detection but continue countdown
                 if hasattr(self, 'motion_detection_enabled_at') and time.time() < self.motion_detection_enabled_at:
                     try:
-                        self.log_step(2, 'WARMUP', 'Reading sensor distance during warm-up')
-                        current_distance = sensor.distance * 100
-                        self.previous_distance = current_distance
+                        remaining_warmup = int(self.motion_detection_enabled_at - time.time())
+                        self.log_step(2, 'WARMUP', f'Sensor warmup period - motion detection disabled ({remaining_warmup}s remaining)')
+                        distance_reading = sensor.distance
+                        if distance_reading is None:
+                            current_distance = 0.0
+                        else:
+                            current_distance = distance_reading * 100
+                        self.log_step(2, 'WARMUP', f'Current distance reading: {current_distance:.2f}cm (monitoring only - NOT checking for motion yet)')
                     except Exception as e:
-                        self.log_error(2, 'WARMUP', 'Sensor read failed (using previous distance)', e)
+                        self.log_error(2, 'WARMUP', 'Sensor read failed during warmup', e)
                         print(f"Sensor read error during warmup: {e}")
-                        current_distance = self.previous_distance
                     minutes, seconds = divmod(self.countdown_time, 60)
                     self.countdown_label.text = f"{minutes:02}:{seconds:02}"
                     self.countdown_time -= 1
                     return
                 
                 try:
-                    self.log_step(3, 'CYCLE', 'Reading sensor distance')
-                    current_distance = sensor.distance * 100
-                except Exception as e:
-                    self.log_error(3, 'CYCLE', 'Sensor read failed (using previous distance)', e)
-                    print(f"Sensor read error: {e}")
-                    current_distance = self.previous_distance  # Use last known good value
-                print("current distance")
-                print(current_distance)
-                print(self.countdown_time)
-                print("previous distance")
-                print(self.previous_distance)
-                print("Threshold")
-                print(self.previous_distance - movement_threshold)
-                if  current_distance < self.previous_distance - movement_threshold or current_distance > self.previous_distance + movement_threshold:
-                    print("in motion loop")
-                    self.log_step(4, 'MOTION', 'Motion threshold exceeded - entering motion handling branch')
+                    self.log_step(3, 'CYCLE', 'Reading sensor distance for motion detection')
+                    distance_reading = sensor.distance
                     
-                    self.previous_distance = current_distance
+                    # Handle None or very close readings (sensor returns None when object is too close)
+                    if distance_reading is None or distance_reading < 0.02:  # Less than 2cm or None
+                        current_distance = 0.0  # Treat as 0cm - definitely motion detected
+                        self.log_step(3, 'CYCLE', 'Object extremely close or sensor blocked - treating as 0cm')
+                    else:
+                        current_distance = distance_reading * 100
+                    
+                    self.log_step(3, 'CYCLE', f'Current distance: {current_distance:.2f}cm | Threshold: {self.MOTION_THRESHOLD_CM}cm')
+                except Exception as e:
+                    self.log_error(3, 'CYCLE', 'Sensor read failed - skipping this cycle', e)
+                    print(f"Sensor read error: {e}")
+                    # Skip this cycle and continue countdown
                     minutes, seconds = divmod(self.countdown_time, 60)
                     self.countdown_label.text = f"{minutes:02}:{seconds:02}"
                     self.countdown_time -= 1
+                    return
+                print("current distance")
+                print(current_distance)
+                print(self.countdown_time)
+                print("Motion Threshold (Fixed)")
+                print(self.MOTION_THRESHOLD_CM)
+                # Check if any motion detected below 10cm threshold
+                if current_distance < self.MOTION_THRESHOLD_CM:
+                    print("in motion loop")
+                    self.log_step(4, 'MOTION', f'MOTION DETECTED! Distance {current_distance:.2f}cm is below {self.MOTION_THRESHOLD_CM}cm threshold')
+                    
+                    # Motion detected - no baseline tracking needed with fixed threshold
+                    minutes, seconds = divmod(self.countdown_time, 60)
+                    self.log_step(4, 'MOTION', f'Countdown was at {minutes:02}:{seconds:02} when motion detected')
                     self.countdown_label.text = "Error: Motion Detected"
                     self.countdown_label.font_size = '35pt'
                     end_time = time.localtime()
-                    reason = "Error: Motion Detected"
-                    current_distance=0
+                    reason = f"Error: Motion Detected at {current_distance:.2f}cm (threshold: {self.MOTION_THRESHOLD_CM}cm)"
+                    self.log_step(4, 'MOTION', f'Reason logged: {reason}')
                     
                     print(reason)  
                     print (end_time)
@@ -1103,8 +1374,6 @@ class PageOne(Screen):
                     values = (host_N, end_time, host_N, self.start_time, end_time, 'failed', reason, opID, shared.get_bedId(),self.side_selected)
 
                     mycursor.execute(sql, values)
-                    
-                    
                     
                     #mycursor.execute('insert into device_data (D_Number,Serial,Start_date,End_date, Diagnostic, Code,Operator_Id,Bed_Id) values (%s,%s,%s,%s,%s,%s,%s,%s)', ( 'CONCAT'(host_N, ' ', start_time),host_N, start_time, end_time, 'ok', reason,opID,shared.get_bedId() ))
                     print("Error Working")
@@ -1160,8 +1429,8 @@ class PageOne(Screen):
                     return  # Exit after handling motion detection to prevent further execution
                 else:   
                     print("in else - no motion detected")
-                    self.log_step(4, 'CYCLE', 'No motion detected - updating baseline and continuing countdown')
-                    self.previous_distance = current_distance  # Update baseline for next check
+                    self.log_step(4, 'CYCLE', f'No motion detected - distance {current_distance:.2f}cm is above {self.MOTION_THRESHOLD_CM}cm threshold')
+                    # No baseline tracking needed - just continue countdown
                     minutes, seconds = divmod(self.countdown_time, 60)
                     self.countdown_label.text = f"{minutes:02}:{seconds:02}"
                     print(f"Countdown: {minutes:02}:{seconds:02} ({self.countdown_time} seconds remaining)")
@@ -1216,6 +1485,7 @@ class PageOne(Screen):
                 values = (host_N, end_time, host_N, self.start_time, end_time, 'ok', reason, opID, shared.get_bedId(),self.side_selected)
 
                 mycursor.execute(sql, values)
+                
                 #mycursor.execute('insert into device_data (D_Number,Serial,Start_date,End_date, Diagnostic, Code,Operator_Id,Bed_Id) values (%s,%s,%s,%s,%s,%s,%s,%s)', ( 'CONCAT'(host_N, '', start_time),host_N, start_time, end_time, 'ok', reason,opID,shared.get_bedId() ))
                 print("Success Working")
                 self.log_step(6, 'SUCCESS', 'Committing success record to DB')
