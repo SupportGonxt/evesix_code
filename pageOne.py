@@ -143,7 +143,7 @@ class PageOne(Screen):
             INSERT INTO device_data (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side)
             VALUES (CONCAT(%s, ' ', %s), %s, %s, NULL, %s, %s, %s, %s, %s)
             """
-            values = (host_N, self.start_time, host_N, self.start_time, 'in_progress', 'cycle_started', opID, bed_id, self.side_selected)
+            values = (host_N, self.start_time, host_N, self.start_time, 'in_progress', 'Emergency Stop Activated', opID, bed_id, self.side_selected)
             mycursor.execute(sql, values)
             mydb.commit()
             
@@ -185,7 +185,7 @@ class PageOne(Screen):
             print("[RECOVERY] Database connection established")
             
             # Find records with NULL end_time for this machine (emergency shutoffs or incomplete cycles)
-            sql = "SELECT Start_date, Operator_Id, Bed_Id, Side, Code FROM device_data WHERE Serial = %s AND End_date IS NULL AND (Code = 'Emergency Shutoff' OR Code = 'cycle_started') ORDER BY Start_date DESC"
+            sql = "SELECT Start_date, Operator_Id, Bed_Id, Side, Code FROM device_data WHERE Serial = %s AND End_date IS NULL AND (Code = 'Emergency Shutoff' OR Code = 'Emergency Stop Activated') ORDER BY Start_date DESC"
             mycursor.execute(sql, (host_N,))
             pending_records = mycursor.fetchall()
             print(f"[RECOVERY] Query executed. Found {len(pending_records) if pending_records else 0} records")
