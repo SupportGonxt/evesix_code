@@ -90,10 +90,6 @@ class PageOne(Screen):
         # Hardcoded absolute path for cloud sync script (robot deployment environment).
         # Adjust if the directory changes on the target device.
         self.CLOUD_SYNC_PATH = '/home/gonxt/evesix_code/cloudSync.py'
-        
-        # Check for incomplete emergency shutoff records and complete them
-        # Schedule this to run after a short delay to ensure everything is initialized
-        Clock.schedule_once(lambda dt: self.complete_pending_shutoff_records(), 2)
 
 
     # ---------------- Logging Helpers ----------------
@@ -160,167 +156,71 @@ class PageOne(Screen):
             print(f"[START] Traceback:\n{traceback.format_exc()}")
             print("="*60 + "\n")
 
-    # ---------------- Emergency Shutoff Recovery ----------------
-    def complete_pending_shutoff_records(self):
-        """
-        Check for emergency shutoff records without end_time and complete them.
-        This runs when the machine starts up.
-        """
-        print("="*60)
-        print("[EMERGENCY SHUTOFF RECOVERY] Starting check...")
-        print("="*60)
-        try:
-            host_N = platform.node()
-            current_time = time.localtime()
-            print(f"[RECOVERY] Machine Serial: {host_N}")
-            print(f"[RECOVERY] Current Time: {time.strftime('%Y-%m-%d %H:%M:%S', current_time)}")
-            
-            mydb = mysql.connector.connect(
-                host="localhost",
-                user="root",
-                password="Robot123#",
-                database="robotdb"
-            )
-            mycursor = mydb.cursor()
-            print("[RECOVERY] Database connection established")
-            
-            # Find records with NULL end_time for this machine (emergency shutoffs or incomplete cycles)
-            sql = "SELECT Start_date, Operator_Id, Bed_Id, Side, Code FROM device_data WHERE Serial = %s AND End_date IS NULL AND (Code = 'Emergency Shutoff' OR Code = 'Emergency Stop Activated') ORDER BY Start_date DESC"
-            mycursor.execute(sql, (host_N,))
-            pending_records = mycursor.fetchall()
-            print(f"[RECOVERY] Query executed. Found {len(pending_records) if pending_records else 0} records")
-            
-            if pending_records:
-                print(f"\n[RECOVERY] *** FOUND {len(pending_records)} PENDING EMERGENCY SHUTOFF RECORD(S) ***")
-                
-                for idx, record in enumerate(pending_records, 1):
-                    start_date, op_id, bed_id, side, code = record
-                    print(f"\n[RECOVERY] Processing record {idx}/{len(pending_records)}:")
-                    print(f"  - Start Date: {start_date}")
-                    print(f"  - Start Date Type: {type(start_date)}")
-                    print(f"  - Operator ID: {op_id}")
-                    print(f"  - Bed ID: {bed_id}")
-                    print(f"  - Side: {side}")
-                    print(f"  - Original Code: {code}")
-                    
-                    # Calculate end_time as start_date + 1 minute
-                    # Handle both datetime objects and time.struct_time
-                    if isinstance(start_date, time.struct_time):
-                        start_seconds = time.mktime(start_date)
-                    elif hasattr(start_date, 'timestamp'):
-                        # It's a datetime object
-                        start_seconds = start_date.timestamp()
-                    else:
-                        # Try to convert to timestamp
-                        start_seconds = time.mktime(start_date)
-                    
-                    end_seconds = start_seconds + 60  # Add 1 minute
-                    end_time = time.localtime(end_seconds)
-                    
-                    # Convert end_time to datetime string for MySQL
-                    end_time_str = time.strftime('%Y-%m-%d %H:%M:%S', end_time)
-                    print(f"  - Calculated End_date: {end_time_str} (start + 1 minute)")
-                    
-                    # Update the record with calculated end_time
-                    # Use the datetime string directly for better compatibility
-                    update_sql = """
-                    UPDATE device_data 
-                    SET End_date = %s, D_Number = CONCAT(%s, ' ', %s), Diagnostic = 'stopped', Code = 'Emergency Shutoff'
-                    WHERE Serial = %s AND Start_date = %s AND End_date IS NULL
-                    """
-                    mycursor.execute(update_sql, (end_time_str, host_N, end_time_str, host_N, start_date))
-                    rows_affected = mycursor.rowcount
-                    print(f"  - UPDATE executed - Rows affected: {rows_affected}")
-                    
-                    if rows_affected == 0:
-                        print(f"  - ⚠️ WARNING: No rows were updated! Record may not exist or already has End_date")
-                        # Try to debug - check if record still exists
-                        check_sql = "SELECT Start_date, End_date, Code FROM device_data WHERE Serial = %s AND Start_date = %s"
-                        mycursor.execute(check_sql, (host_N, start_date))
-                        check_result = mycursor.fetchone()
-                        if check_result:
-                            print(f"  - Record found: Start={check_result[0]}, End={check_result[1]}, Code={check_result[2]}")
-                        else:
-                            print(f"  - Record NOT found in database!")
-                    else:
-                        print(f"  - ✓ Updated End_date to: {end_time_str}")
-                        print(f"  - ✓ Updated Code to: 'Emergency Shutoff'")
-                    
-                    # Queue to data_q for cloud sync
-                    try:
-                        q_sql = ("INSERT IGNORE INTO data_q (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side, Update_status, Insert_date) "
-                                 "VALUES (CONCAT(%s,' ',%s), %s, %s, %s, %s, %s, %s, %s, %s, 'no', NOW())")
-                        q_values = (host_N, end_time_str, host_N, start_date, end_time_str, 'stopped', 'Emergency Shutoff', op_id, bed_id, side)
-                        mycursor.execute(q_sql, q_values)
-                        print(f"  - Queued to data_q for cloud sync")
-                    except Exception as e:
-                        print(f"  - ERROR queuing to data_q: {e}")
-                
-                mydb.commit()
-                print(f"\n[RECOVERY] ✓ Successfully completed {len(pending_records)} emergency shutoff record(s)")
-            else:
-                print("[RECOVERY] No pending emergency shutoff records found")
-            
-            mycursor.close()
-            mydb.close()
-            print("[RECOVERY] Database connection closed")
-            print("="*60)
-            
-        except Exception as e:
-            print(f"\n[RECOVERY] ✗ ERROR completing pending shutoff records:")
-            print(f"[RECOVERY] Error type: {type(e).__name__}")
-            print(f"[RECOVERY] Error message: {e}")
-            import traceback
-            print(f"[RECOVERY] Traceback:\n{traceback.format_exc()}")
-            print("="*60)
-
     # ---------------- USB Port Refresh ----------------
     def refresh_usb_ports(self):
         """
-        Refresh USB ports to clear any touchscreen freezing issues.
+        Refresh USB input devices to clear touchscreen freezing issues.
         This is called at the end of a successful cycle.
-        Performs a safe USB hub reset that doesn't require sudo.
+        Focuses on refreshing input devices (touchscreen/HID) rather than all USB ports.
         """
-        self.log_info('SUCCESS', 'Refreshing USB ports...')
+        self.log_info('SUCCESS', 'Refreshing USB input devices...')
         
         try:
-            # Method 1: Try using usb_modeswitch if available (user permission)
+            # Method 1: Rebind USB input devices directly via /sys/bus/usb/drivers
+            # This is more targeted and less disruptive than full port cycling
             result = subprocess.run(
-                ['sudo', 'uhubctl', '-a', 'cycle', '-p', 'all'],
-                timeout=10,
+                ['bash', '-c', 'for device in /sys/bus/usb/drivers/usb/*/authorized; do echo 0 > "$device" 2>/dev/null; sleep 0.1; echo 1 > "$device" 2>/dev/null; done'],
+                timeout=5,
                 capture_output=True,
                 text=True
             )
             if result.returncode == 0:
-                self.log_info('SUCCESS', 'USB ports refreshed with uhubctl')
+                self.log_info('SUCCESS', 'USB input devices reset via sysfs')
+                time.sleep(0.5)
                 return True
-        except FileNotFoundError:
-            pass
         except Exception as e:
-            self.log_error(0, 'SUCCESS', f'uhubctl failed: {e}')
+            self.log_error(0, 'SUCCESS', f'sysfs reset failed: {e}')
         
         try:
-            # Method 2: Rebind USB HID driver (more reliable)
+            # Method 2: Reload USB HID driver (specifically for touchscreen/input devices)
+            self.log_info('SUCCESS', 'Reloading USB HID driver for input devices...')
             result = subprocess.run(
                 ['sudo', 'modprobe', '-r', 'usbhid'],
                 timeout=5,
-                capture_output=True
+                capture_output=True,
+                text=True
             )
-            time.sleep(1)
+            time.sleep(0.5)
             result = subprocess.run(
                 ['sudo', 'modprobe', 'usbhid'],
                 timeout=5,
-                capture_output=True
+                capture_output=True,
+                text=True
             )
             if result.returncode == 0:
-                self.log_info('SUCCESS', 'USB HID driver reloaded successfully')
-                time.sleep(1)
+                self.log_info('SUCCESS', 'USB HID driver reloaded - input devices refreshed')
+                time.sleep(0.5)
                 return True
         except Exception as e:
             self.log_error(0, 'SUCCESS', f'USB HID reload failed: {e}')
         
+        try:
+            # Method 3: Restart input event devices
+            result = subprocess.run(
+                ['sudo', 'systemctl', 'restart', 'input.target'],
+                timeout=5,
+                capture_output=True,
+                text=True
+            )
+            if result.returncode == 0:
+                self.log_info('SUCCESS', 'Input devices restarted via systemd')
+                time.sleep(0.5)
+                return True
+        except Exception as e:
+            self.log_error(0, 'SUCCESS', f'systemd input restart failed: {e}')
+        
         # If we get here, methods failed but log it
-        self.log_error(0, 'SUCCESS', 'USB port refresh failed - manual sudo config may be needed')
+        self.log_error(0, 'SUCCESS', 'USB input device refresh failed - touchscreen may need manual intervention')
         return False
 
     # ---------------- Cloud Sync Trigger ----------------
@@ -1366,16 +1266,21 @@ class PageOne(Screen):
                     print("op ID is",opID)
                     #sensor.close()
                     
+                    # Convert end_time to datetime string for MySQL compatibility
+                    end_time_str = time.strftime('%Y-%m-%d %H:%M:%S', end_time)
                     
+                    # UPDATE the placeholder record instead of INSERT to avoid duplicates
                     sql = """
-                    INSERT INTO device_data (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side)
-                    VALUES (CONCAT(%s, ' ', %s), %s, %s, %s, %s, %s, %s, %s,%s)
+                    UPDATE device_data 
+                    SET D_Number = CONCAT(%s, ' ', %s), End_date = %s, Diagnostic = %s, Code = %s
+                    WHERE Serial = %s AND Start_date = %s AND Diagnostic = 'in_progress'
                     """
-                    values = (host_N, end_time, host_N, self.start_time, end_time, 'failed', reason, opID, shared.get_bedId(),self.side_selected)
+                    values = (host_N, end_time_str, end_time_str, 'failed', reason, host_N, self.start_time)
 
                     mycursor.execute(sql, values)
+                    rows_updated = mycursor.rowcount
+                    self.log_step(7, 'MOTION', f'Updated placeholder record (rows affected: {rows_updated})')
                     
-                    #mycursor.execute('insert into device_data (D_Number,Serial,Start_date,End_date, Diagnostic, Code,Operator_Id,Bed_Id) values (%s,%s,%s,%s,%s,%s,%s,%s)', ( 'CONCAT'(host_N, ' ', start_time),host_N, start_time, end_time, 'ok', reason,opID,shared.get_bedId() ))
                     print("Error Working")
                     self.log_step(7, 'MOTION', 'Committing failure record to DB')
                     mydb.commit()
@@ -1385,7 +1290,7 @@ class PageOne(Screen):
                         q_cursor = mydb.cursor()
                         q_sql = ("INSERT IGNORE INTO data_q (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side, Update_status, Insert_date) "
                                  "VALUES (CONCAT(%s,' ',%s), %s, %s, %s, %s, %s, %s, %s, %s, 'no', NOW())")
-                        q_values = (host_N, end_time, host_N, self.start_time, end_time, 'failed', reason, opID, shared.get_bedId(), self.side_selected)
+                        q_values = (host_N, end_time_str, host_N, self.start_time, end_time_str, 'failed', reason, opID, shared.get_bedId(), self.side_selected)
                         q_cursor.execute(q_sql, q_values)
                         mydb.commit()
                         self.log_step('7.2', 'MOTION', f'data_q queued (rowcount={q_cursor.rowcount})')
@@ -1477,16 +1382,21 @@ class PageOne(Screen):
                  
 
     
+                # Convert end_time to datetime string for MySQL compatibility
+                end_time_str = time.strftime('%Y-%m-%d %H:%M:%S', end_time)
 
+                # UPDATE the placeholder record instead of INSERT to avoid duplicates
                 sql = """
-                INSERT INTO device_data (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side)
-                VALUES (CONCAT(%s, ' ', %s), %s, %s, %s, %s, %s, %s, %s,%s)
+                UPDATE device_data 
+                SET D_Number = CONCAT(%s, ' ', %s), End_date = %s, Diagnostic = %s, Code = %s
+                WHERE Serial = %s AND Start_date = %s AND Diagnostic = 'in_progress'
                 """
-                values = (host_N, end_time, host_N, self.start_time, end_time, 'ok', reason, opID, shared.get_bedId(),self.side_selected)
+                values = (host_N, end_time_str, end_time_str, 'ok', reason, host_N, self.start_time)
 
                 mycursor.execute(sql, values)
+                rows_updated = mycursor.rowcount
+                self.log_step(6, 'SUCCESS', f'Updated placeholder record (rows affected: {rows_updated})')
                 
-                #mycursor.execute('insert into device_data (D_Number,Serial,Start_date,End_date, Diagnostic, Code,Operator_Id,Bed_Id) values (%s,%s,%s,%s,%s,%s,%s,%s)', ( 'CONCAT'(host_N, '', start_time),host_N, start_time, end_time, 'ok', reason,opID,shared.get_bedId() ))
                 print("Success Working")
                 self.log_step(6, 'SUCCESS', 'Committing success record to DB')
                 mydb.commit()
@@ -1496,7 +1406,7 @@ class PageOne(Screen):
                     q_cursor = mydb.cursor()
                     q_sql = ("INSERT IGNORE INTO data_q (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side, Update_status, Insert_date) "
                              "VALUES (CONCAT(%s,' ',%s), %s, %s, %s, %s, %s, %s, %s, %s, 'no', NOW())")
-                    q_values = (host_N, end_time, host_N, self.start_time, end_time, 'ok', reason, opID, shared.get_bedId(), self.side_selected)
+                    q_values = (host_N, end_time_str, host_N, self.start_time, end_time_str, 'ok', reason, opID, shared.get_bedId(), self.side_selected)
                     q_cursor.execute(q_sql, q_values)
                     mydb.commit()
                     self.log_step('6.2', 'SUCCESS', f'data_q queued (rowcount={q_cursor.rowcount})')
