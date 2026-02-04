@@ -167,6 +167,23 @@ class Dashboard(BoxLayout):
 
         header.add_widget(header_right)
         self.screen_manager = ScreenManager()
+        
+        # Store original current property setter
+        self._original_set_current = self.screen_manager.__class__.current.fset
+        
+        # Wrap screen_manager.current setter to prevent changes during cycle
+        def guarded_set_current(sm, value):
+            if self.cycle_running and value != 'page_one':
+                print(f"[DASHBOARD] BLOCKED screen change to '{value}' - cycle in progress")
+                return
+            self._original_set_current(sm, value)
+        
+        # Override the property setter
+        self.screen_manager.__class__.current = property(
+            self.screen_manager.__class__.current.fget,
+            guarded_set_current
+        )
+        
         self.screen_manager.add_widget(SplashScreen(name='splash_screen'))
         self.screen_manager.add_widget(PageOne(name='page_one'))
         self.screen_manager.add_widget(PageTwo(name='page_two'))
@@ -247,6 +264,11 @@ class Dashboard(BoxLayout):
         self.header_rect.size = instance.size
         
     def check_login(self, instance):
+        # Prevent navigation if cycle is running
+        if self.cycle_running:
+            print('[DASHBOARD] Navigation blocked - cycle in progress')
+            return
+        
         if shared.get_usercode() == '':
          print('not found')
          self.screen_manager.current = 'login_screen'
@@ -256,6 +278,11 @@ class Dashboard(BoxLayout):
             self.screen_manager.current = 'page_one'
             
     def check_setting_login(self, instance):
+        # Prevent navigation if cycle is running
+        if self.cycle_running:
+            print('[DASHBOARD] Navigation blocked - cycle in progress')
+            return
+        
         if shared.get_admin_usercode() == '':
          print('not found')
          self.screen_manager.current = 'login_screen'
