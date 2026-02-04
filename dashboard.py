@@ -167,23 +167,6 @@ class Dashboard(BoxLayout):
 
         header.add_widget(header_right)
         self.screen_manager = ScreenManager()
-        
-        # Store original current property setter
-        self._original_set_current = self.screen_manager.__class__.current.fset
-        
-        # Wrap screen_manager.current setter to prevent changes during cycle
-        def guarded_set_current(sm, value):
-            if self.cycle_running and value != 'page_one':
-                print(f"[DASHBOARD] BLOCKED screen change to '{value}' - cycle in progress")
-                return
-            self._original_set_current(sm, value)
-        
-        # Override the property setter
-        self.screen_manager.__class__.current = property(
-            self.screen_manager.__class__.current.fget,
-            guarded_set_current
-        )
-        
         self.screen_manager.add_widget(SplashScreen(name='splash_screen'))
         self.screen_manager.add_widget(PageOne(name='page_one'))
         self.screen_manager.add_widget(PageTwo(name='page_two'))
@@ -228,7 +211,17 @@ class Dashboard(BoxLayout):
         self.add_widget(header)
         self.add_widget(main_layout)
         
+        # Bind to screen manager current property to intercept screen changes
+        self.screen_manager.bind(current=self.on_screen_change)
         
+        
+    def on_screen_change(self, instance, value):
+        """Intercept all screen changes and block them during active cycle."""
+        if self.cycle_running and value != 'page_one':
+            print(f"[DASHBOARD] BLOCKED screen change to '{value}' - cycle in progress")
+            # Force it back to page_one
+            Clock.schedule_once(lambda dt: setattr(self.screen_manager, 'current', 'page_one'), 0)
+    
     def update_signal(self, dt):
         # Run connectivity check in background thread to avoid blocking UI
         threading.Thread(target=self._check_connectivity, daemon=True).start()
