@@ -31,6 +31,7 @@ from kivy.uix.image import Image
 import sys
 import os
 from version import VERSION
+from kivy.app import App
 
 
 
@@ -1125,6 +1126,15 @@ class PageOne(Screen):
         self.main_layout.clear_widgets()
         self.layoutback.clear_widgets()
         self.layout.clear_widgets()
+        
+        # Disable sidebar navigation during cycle
+        try:
+            dashboard = App.get_running_app().root
+            if hasattr(dashboard, 'disable_sidebar_navigation'):
+                dashboard.disable_sidebar_navigation()
+        except Exception as e:
+            print(f"[CYCLE] Warning: Could not disable sidebar navigation: {e}")
+        
         self.countdown_label = Label(
             text=f"{int(float(shared.get_time()))}:00",
             font_size=200,
@@ -1328,6 +1338,15 @@ class PageOne(Screen):
                     #self.layout.add_widget(self.back_button1)
                     self.log_step(9, 'MOTION', 'Starting long beeping alert thread')
                     self.start_long_beeping()
+                    
+                    # Re-enable sidebar navigation after motion failure
+                    try:
+                        dashboard = App.get_running_app().root
+                        if hasattr(dashboard, 'enable_sidebar_navigation'):
+                            dashboard.enable_sidebar_navigation()
+                    except Exception as e:
+                        print(f"[CYCLE] Warning: Could not enable sidebar navigation: {e}")
+                    
                     # Trigger cloud sync on failure as well (to flush any pending queued rows)
                     self.log_step(10, 'MOTION', 'Triggering asynchronous cloud sync after motion failure')
                     Thread(target=lambda: self.trigger_cloud_sync(phase='MOTION', start_step=11), daemon=True).start()
@@ -1454,6 +1473,14 @@ class PageOne(Screen):
                 #self.back_button.bind(on_release=self.go_to_begin_robot_page)
                 #self.add_widget(self.back_button)
                 self.log_step(9, 'SUCCESS', 'Added Done button to layout')
+                
+                # Re-enable sidebar navigation after successful completion
+                try:
+                    dashboard = App.get_running_app().root
+                    if hasattr(dashboard, 'enable_sidebar_navigation'):
+                        dashboard.enable_sidebar_navigation()
+                except Exception as e:
+                    print(f"[CYCLE] Warning: Could not enable sidebar navigation: {e}")
                 
                 # Auto-trigger cloud sync asynchronously after successful cycle.
                 # USB ports will be refreshed after cloud sync completes.

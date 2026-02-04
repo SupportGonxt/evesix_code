@@ -48,6 +48,8 @@ class Dashboard(BoxLayout):
         super().__init__(**kwargs)
         self.orientation = 'vertical'
         self.current_signal_strength = 0  # Track signal strength
+        self.cycle_running = False  # Track if a cleaning cycle is active
+        self.sidebar_buttons = []  # Store references to sidebar buttons
         # Verify image assets early
         self._verify_images([
             'logo1.png',
@@ -165,6 +167,23 @@ class Dashboard(BoxLayout):
 
         header.add_widget(header_right)
         self.screen_manager = ScreenManager()
+        
+        # Store original current property setter
+        self._original_set_current = self.screen_manager.__class__.current.fset
+        
+        # Wrap screen_manager.current setter to prevent changes during cycle
+        def guarded_set_current(sm, value):
+            if self.cycle_running and value != 'page_one':
+                print(f"[DASHBOARD] BLOCKED screen change to '{value}' - cycle in progress")
+                return
+            self._original_set_current(sm, value)
+        
+        # Override the property setter
+        self.screen_manager.__class__.current = property(
+            self.screen_manager.__class__.current.fget,
+            guarded_set_current
+        )
+        
         self.screen_manager.add_widget(SplashScreen(name='splash_screen'))
         self.screen_manager.add_widget(PageOne(name='page_one'))
         self.screen_manager.add_widget(PageTwo(name='page_two'))
@@ -187,6 +206,7 @@ class Dashboard(BoxLayout):
                           background_color=(0.57, 2, 6.5, 1),
                           on_release=self.check_login)
         side_menu.add_widget(btnBegin)
+        self.sidebar_buttons.append(btnBegin)  # Store reference
 
         for page, text, callback in side_menu_buttons:
             btn = Button(
@@ -196,6 +216,7 @@ class Dashboard(BoxLayout):
                 on_release=lambda btn, cb=callback, pg=page: cb(pg)
             )
             side_menu.add_widget(btn)
+            self.sidebar_buttons.append(btn)  # Store reference
 
 
 
@@ -243,6 +264,11 @@ class Dashboard(BoxLayout):
         self.header_rect.size = instance.size
         
     def check_login(self, instance):
+        # Prevent navigation if cycle is running
+        if self.cycle_running:
+            print('[DASHBOARD] Navigation blocked - cycle in progress')
+            return
+        
         if shared.get_usercode() == '':
          print('not found')
          self.screen_manager.current = 'login_screen'
@@ -252,6 +278,11 @@ class Dashboard(BoxLayout):
             self.screen_manager.current = 'page_one'
             
     def check_setting_login(self, instance):
+        # Prevent navigation if cycle is running
+        if self.cycle_running:
+            print('[DASHBOARD] Navigation blocked - cycle in progress')
+            return
+        
         if shared.get_admin_usercode() == '':
          print('not found')
          self.screen_manager.current = 'login_screen'
@@ -260,7 +291,27 @@ class Dashboard(BoxLayout):
             print('found')
             self.screen_manager.current = 'page_three'
        
+    def disable_sidebar_navigation(self):
+        """Disable sidebar buttons during active cleaning cycle."""
+        self.cycle_running = True
+        for btn in self.sidebar_buttons:
+            btn.disabled = True
+            btn.background_color = (0.3, 0.3, 0.3, 1)  # Gray out buttons
+        print("[DASHBOARD] Sidebar navigation disabled - cycle running")
+    
+    def enable_sidebar_navigation(self):
+        """Re-enable sidebar buttons after cycle completes."""
+        self.cycle_running = False
+        for btn in self.sidebar_buttons:
+            btn.disabled = False
+            btn.background_color = (0.57, 2, 6.5, 1)  # Restore original color
+        print("[DASHBOARD] Sidebar navigation enabled - cycle complete")
+    
     def switch_page(self, page_name):
+        # Prevent navigation if cycle is running
+        if self.cycle_running:
+            print(f"[DASHBOARD] Navigation blocked - cycle in progress")
+            return
         self.screen_manager.current = page_name
 
     def stop_app(self, *args):
