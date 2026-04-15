@@ -32,7 +32,19 @@ import sys
 import os
 from version import VERSION
 from kivy.app import App
-
+from hardware_monitor import (
+    timeout_call,
+    safe_db_connect,
+    safe_subprocess_run,
+    log_calls,
+    HardwareWatchdog,
+    ThreadHealthMonitor,
+    make_watchdog_pet_callback,
+    timed_block,
+    hw_log,
+    thread_log,
+    cycle_log,
+)
 
 
 # Define the command to run the external script
@@ -91,6 +103,24 @@ class PageOne(Screen):
         # Hardcoded absolute path for cloud sync script (robot deployment environment).
         # Adjust if the directory changes on the target device.
         self.CLOUD_SYNC_PATH = '/home/gonxt/evesix_code/cloudSync.py'
+
+        # ── Watchdog & thread health monitor ─────────────────────────────────
+        # Both run in daemon threads and are fully isolated from the Kivy event
+        # loop. If they fail for any reason the dashboard continues unaffected.
+        try:
+            self._watchdog = HardwareWatchdog(timeout=20.0)
+            self._watchdog.start()
+            Clock.schedule_interval(make_watchdog_pet_callback(self._watchdog), 5)
+        except Exception as e:
+            print(f"[Monitor] Watchdog failed to start (non-fatal): {e}")
+            self._watchdog = None
+
+        try:
+            self._thread_monitor = ThreadHealthMonitor(check_interval=60.0)
+            self._thread_monitor.start()
+        except Exception as e:
+            print(f"[Monitor] ThreadHealthMonitor failed to start (non-fatal): {e}")
+            self._thread_monitor = None
 
 
     # ---------------- Logging Helpers ----------------
@@ -261,7 +291,12 @@ class PageOne(Screen):
             self.log_step(f'{net_step}', phase, 'Internet check: OFFLINE (cloudSync will internally wait)')
         try:
             self.log_step(start_step + 1, phase, f'Launching cloudSync.py for data upload (path={script_path})')
-            result = subprocess.run([sys.executable, script_path], capture_output=True, text=True)
+            result = safe_subprocess_run(
+                [sys.executable, script_path],
+                timeout=120,           # kill if cloudSync.py hangs > 2 min
+                capture_output=True,
+                text=True,
+            )
             duration = round(time.time() - start, 2)
             # Post-run connectivity insight (may have come online during script)
             online_after = _quick_net_check()
@@ -1061,7 +1096,9 @@ class PageOne(Screen):
             self.beep_thread = Thread(target=self.beep_long_loop)
             self.beep_thread.daemon = True  # Ensure the thread stops when the app closes
             self.beep_thread.start()
-            
+            if self._thread_monitor:
+                self._thread_monitor.register(self.beep_thread, "beep_long_loop")
+
     def start_beeping(self):
         """Start the beeping process in a background thread."""
         if not self.beeping:
@@ -1069,6 +1106,8 @@ class PageOne(Screen):
             self.beep_thread = Thread(target=self.beep_loop)
             self.beep_thread.daemon = True  # Ensure the thread stops when the app closes
             self.beep_thread.start()
+            if self._thread_monitor:
+                self._thread_monitor.register(self.beep_thread, "beep_loop")
 
     def stop_beeping(self):
         """Stop the beeping process."""
@@ -1194,7 +1233,12 @@ class PageOne(Screen):
                     try:
                         remaining_warmup = int(self.motion_detection_enabled_at - time.time())
                         self.log_step(2, 'WARMUP', f'Sensor warmup period - motion detection disabled ({remaining_warmup}s remaining)')
-                        distance_reading = sensor.distance
+                        distance_reading = timeout_call(
+                            lambda: sensor.distance,
+                            timeout=2.0,
+                            default=None,
+                            label="sensor.distance (warmup)",
+                        )
                         if distance_reading is None:
                             current_distance = 0.0
                         else:
@@ -1210,8 +1254,13 @@ class PageOne(Screen):
                 
                 try:
                     self.log_step(3, 'CYCLE', 'Reading sensor distance for motion detection')
-                    distance_reading = sensor.distance
-                    
+                    distance_reading = timeout_call(
+                        lambda: sensor.distance,
+                        timeout=2.0,
+                        default=None,
+                        label="sensor.distance (cycle)",
+                    )
+
                     # Handle None or very close readings (sensor returns None when object is too close)
                     if distance_reading is None or distance_reading < 0.02:  # Less than 2cm or None
                         current_distance = 0.0  # Treat as 0cm - definitely motion detected
@@ -1262,11 +1311,12 @@ class PageOne(Screen):
                     self.strip.show()
                     print("LEDs turned BLUE after motion detection")
                     self.log_step(6, 'MOTION', 'Opening DB connection for failure record write')
-                    mydb = mysql.connector.connect(
-                    host="localhost",
-                    user="root",
-                    password="Robot123#",
-                    database="robotdb"
+                    mydb = safe_db_connect(
+                        host="localhost",
+                        user="root",
+                        password="Robot123#",
+                        database="robotdb",
+                        connect_timeout=5,
                     )
                     mycursor = mydb.cursor()
                     end_time = time.localtime()
@@ -1349,7 +1399,10 @@ class PageOne(Screen):
                     
                     # Trigger cloud sync on failure as well (to flush any pending queued rows)
                     self.log_step(10, 'MOTION', 'Triggering asynchronous cloud sync after motion failure')
-                    Thread(target=lambda: self.trigger_cloud_sync(phase='MOTION', start_step=11), daemon=True).start()
+                    _sync_t = Thread(target=lambda: self.trigger_cloud_sync(phase='MOTION', start_step=11), daemon=True)
+                    _sync_t.start()
+                    if self._thread_monitor:
+                        self._thread_monitor.register(_sync_t, "cloud_sync_motion")
                     return  # Exit after handling motion detection to prevent further execution
                 else:   
                     print("in else - no motion detected")
@@ -1387,12 +1440,13 @@ class PageOne(Screen):
                 # Now do database operations (these might block)
                 print("Starting database write...")
                 self.log_step(4, 'SUCCESS', 'Opening DB connection')
-                mydb = mysql.connector.connect(
+                mydb = safe_db_connect(
                     host='localhost',
                     user='root',
                     password="Robot123#",
-                    database="robotdb"
-                    )
+                    database="robotdb",
+                    connect_timeout=5,
+                )
                 self.log_step(5, 'SUCCESS', 'Creating cursor for success record insert')
                 mycursor = mydb.cursor()
                 end_time = time.localtime()
@@ -1485,7 +1539,10 @@ class PageOne(Screen):
                 # Auto-trigger cloud sync asynchronously after successful cycle.
                 # USB ports will be refreshed after cloud sync completes.
                 self.log_step(10, 'SUCCESS', 'Triggering asynchronous cloud sync (post-cycle)')
-                Thread(target=self.trigger_cloud_sync, daemon=True).start()
+                _sync_t = Thread(target=self.trigger_cloud_sync, daemon=True)
+                _sync_t.start()
+                if self._thread_monitor:
+                    self._thread_monitor.register(_sync_t, "cloud_sync_success")
     def go_to_begin_robot_page(self, instance):
         self.layout.clear_widgets()
         self.create_main_content()

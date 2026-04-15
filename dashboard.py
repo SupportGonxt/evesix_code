@@ -8,6 +8,19 @@ from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.uix.label import Label
 from pin_manager import cleanup
+# Set up the root "robot" logger BEFORE importing any other module so that
+# all sub-loggers (robot.hardware, robot.thread, robot.watchdog, etc.) pick
+# up the stdout handler and their output lands in /var/log/robot/robot.log.
+# Wrapped in try/except: a logging failure must NEVER crash the dashboard.
+try:
+    from logger_config import setup_logging, log_startup, log_shutdown
+    # Writes structured logs (hardware, watchdog, cycle, thread) directly to
+    # a file via RotatingFileHandler — flushes after every record, so nothing
+    # is lost if the Pi is powered off mid-session.
+    # Kept separate from robot.log so the two streams don't interleave.
+    setup_logging(log_file='/var/log/robot/robot_monitor.log')
+except Exception:
+    pass
 import shared
 import psutil
 import mysql.connector

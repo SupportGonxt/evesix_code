@@ -5,9 +5,13 @@ After=network.target
 [Service]
 User=gonxt
 WorkingDirectory=/home/gonxt/evesix_code
-ExecStart=/home/gonxt/evesix_code/nv/Scripts/python /home/gonxt/evesix_code/dashboard.py
+ExecStart=/usr/bin/python3 -u /home/gonxt/evesix_code/dashboard.py
 Restart=on-failure
 RestartSec=5
+
+# Force Python to flush stdout/stderr after every line so nothing is lost
+# if the Pi is powered off before the buffer drains.
+Environment=PYTHONUNBUFFERED=1
 
 # Redirect all output to our log file
 StandardOutput=append:/var/log/robot/robot.log

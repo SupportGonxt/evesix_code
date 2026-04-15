@@ -1,12 +1,23 @@
 """
 Logging configuration for Robot Dashboard
-Import and use this at the top of dashboard.py and other modules
+Import and use this at the top of dashboard.py and other modules.
+
+Sub-loggers (all children of "robot", inherit its handlers automatically):
+  robot.hardware  — GPIO reads/writes, relay, sensor, DB connections
+  robot.thread    — Thread start/stop/health events
+  robot.cycle     — Cycle step progression (WARMUP / CYCLE / MOTION / SUCCESS)
+  robot.watchdog  — Watchdog heartbeat and freeze alerts
 """
 
 import sys
 import logging
 from logging.handlers import RotatingFileHandler
 import os
+
+# Production safety: if a log handler itself throws an exception (e.g. disk
+# full, permission error), Python swallows it silently instead of propagating
+# it to the application. The dashboard must never crash due to logging.
+logging.raiseExceptions = False
 
 
 def setup_logging(
@@ -53,17 +64,20 @@ def setup_logging(
         console_handler.setFormatter(formatter)
         logger.addHandler(console_handler)
     
-    # File handler (if specified - for local development)
+    # File handler — writes structured logs directly to disk.
+    # RotatingFileHandler calls flush() after every emit, so no records are
+    # lost on abrupt power-off (unlike stdout which is block-buffered).
+    # Keeps up to 5 × 5 MB = 25 MB of history on disk.
     if log_file:
-        # Create directory if it doesn't exist
         log_dir = os.path.dirname(log_file)
         if log_dir and not os.path.exists(log_dir):
-            os.makedirs(log_dir)
-        
+            os.makedirs(log_dir, exist_ok=True)
+
         file_handler = RotatingFileHandler(
             log_file,
-            maxBytes=10*1024*1024,  # 10MB
-            backupCount=5
+            maxBytes=5 * 1024 * 1024,   # 5 MB per file
+            backupCount=5,               # robot_monitor.log.1 … .5
+            delay=False,                 # open the file immediately on startup
         )
         file_handler.setLevel(log_level)
         file_handler.setFormatter(formatter)
@@ -74,6 +88,17 @@ def setup_logging(
 
 # Pre-configured logger instance
 log = setup_logging()
+
+# ── Sub-loggers for hardware-monitoring subsystems ────────────────────────────
+# Import these directly in any module that needs them, e.g.:
+#   from logger_config import hw_log, thread_log, cycle_log, wd_log
+#
+# They automatically inherit the root "robot" logger's handlers, so all
+# output lands in the same log file / console stream.
+hw_log     = logging.getLogger("robot.hardware")
+thread_log = logging.getLogger("robot.thread")
+cycle_log  = logging.getLogger("robot.cycle")
+wd_log     = logging.getLogger("robot.watchdog")
 
 
 # Convenience functions for common logging patterns
