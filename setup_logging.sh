@@ -19,19 +19,23 @@ if [ ! -f "$DASHBOARD_PATH" ]; then
     exit 1
 fi
 
+# Set correct username and project path
+ROBOT_USER="gonxt"
+ROBOT_PATH="/home/gonxt/evesix_code"
+
 echo "1. Creating log directory..."
 sudo mkdir -p /var/log/robot
-sudo chown $USER:$USER /var/log/robot
-echo "   ✓ Log directory created: /var/log/robot (owned by $USER)"
+sudo chown $ROBOT_USER:$ROBOT_USER /var/log/robot
+echo "   ✓ Log directory created: /var/log/robot (owned by $ROBOT_USER)"
 echo
 
 echo "2. Installing systemd service..."
-# Update the service file with the correct path and user
-sed -e "s|/home/pi/robot|$SCRIPT_DIR|g" \
-    -e "s|User=pi|User=$USER|g" \
+sed -e "s|User=.*|User=$ROBOT_USER|g" \
+    -e "s|WorkingDirectory=.*|WorkingDirectory=$ROBOT_PATH|g" \
+    -e "s|ExecStart=.*|ExecStart=$ROBOT_PATH/nv/Scripts/python $ROBOT_PATH/dashboard.py|g" \
     "$SCRIPT_DIR/robot.service" | \
     sudo tee /etc/systemd/system/robot.service > /dev/null
-echo "   ✓ Service file installed (running as $USER)"
+echo "   ✓ Service file installed (running as $ROBOT_USER)"
 echo
 
 echo "3. Installing logrotate configuration..."
