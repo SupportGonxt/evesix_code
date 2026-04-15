@@ -1,0 +1,17 @@
+[Unit]
+Description=Disinfection Robot Dashboard
+After=network.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/robot
+ExecStart=/usr/bin/python3 /home/pi/robot/dashboard.py
+Restart=on-failure
+RestartSec=5
+
+# Redirect all output to our log file
+StandardOutput=append:/var/log/robot/robot.log
+StandardError=append:/var/log/robot/robot.log
+
+[Install]
+WantedBy=multi-user.target

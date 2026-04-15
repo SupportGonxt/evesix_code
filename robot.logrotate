@@ -1,0 +1,8 @@
+/var/log/robot/robot.log {
+    daily
+    rotate 7
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
