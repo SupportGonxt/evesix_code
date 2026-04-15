@@ -21,15 +21,17 @@ fi
 
 echo "1. Creating log directory..."
 sudo mkdir -p /var/log/robot
-sudo chown pi:pi /var/log/robot
-echo "   ✓ Log directory created: /var/log/robot"
+sudo chown $USER:$USER /var/log/robot
+echo "   ✓ Log directory created: /var/log/robot (owned by $USER)"
 echo
 
 echo "2. Installing systemd service..."
-# Update the service file with the correct path
-sed "s|/home/pi/robot|$SCRIPT_DIR|g" "$SCRIPT_DIR/robot.service" | \
+# Update the service file with the correct path and user
+sed -e "s|/home/pi/robot|$SCRIPT_DIR|g" \
+    -e "s|User=pi|User=$USER|g" \
+    "$SCRIPT_DIR/robot.service" | \
     sudo tee /etc/systemd/system/robot.service > /dev/null
-echo "   ✓ Service file installed"
+echo "   ✓ Service file installed (running as $USER)"
 echo
 
 echo "3. Installing logrotate configuration..."
