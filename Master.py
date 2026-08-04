@@ -30,10 +30,25 @@ def pull_table(conn, table_name):
         print(f"  {table_name}: no rows in D1, skipping.")
         return 0
 
+    # First column is always this table's primary key (true for every table
+    # in REFERENCE_TABLES). Upsert in place on conflict rather than
+    # INSERT OR REPLACE: REPLACE resolves a PK conflict by deleting the
+    # existing row first, which trips local FOREIGN KEY constraints from
+    # this robot's own device_data rows that still reference it.
     columns = list(rows[0].keys())
+    pk = columns[0]
     placeholders = ", ".join(["?"] * len(columns))
     columns_list = ", ".join(columns)
-    insert_sql = f"INSERT OR REPLACE INTO {table_name} ({columns_list}) VALUES ({placeholders})"
+    other_columns = [c for c in columns if c != pk]
+    if other_columns:
+        update_clause = ", ".join(f"{c}=excluded.{c}" for c in other_columns)
+        conflict_action = f"DO UPDATE SET {update_clause}"
+    else:
+        conflict_action = "DO NOTHING"
+    insert_sql = (
+        f"INSERT INTO {table_name} ({columns_list}) VALUES ({placeholders}) "
+        f"ON CONFLICT({pk}) {conflict_action}"
+    )
 
     param_rows = [tuple(row.get(col) for col in columns) for row in rows]
     conn.executemany(insert_sql, param_rows)
