@@ -1,87 +1,65 @@
-import mysql.connector
-from mysql.connector import Error
-import requests
+"""Pull reference data down from Cloudflare D1 into the local SQLite file.
 
-def check_internet_connection():
+This is the cloud -> local half of the sync (the other half, pushing
+locally-generated rows up, is cloudSync.py). It replaces the old
+"AWS RDS MariaDB -> local MariaDB" version of this script.
+
+Reference tables (hospital, hospital_group, ward, bed, robot, operator)
+are maintained centrally in D1 and mirrored down to each robot so the
+touchscreen can look up hospital/ward/bed/operator names without a
+live connection during a cleaning cycle. device_data, data_q, sync_log
+and bulb_replace are deliberately NOT pulled here - those are this
+robot's own write queue and pulling them down would clobber pending
+unsynced rows.
+
+Invoked by the Settings screen's "sync" button (pages.py) before
+cloudSync.py runs, and can also be run standalone:
+
+    python3 Master.py
+"""
+import sys
+
+import cf_d1
+import db
+from schema import REFERENCE_TABLES
+
+
+def pull_table(conn, table_name):
+    rows = cf_d1.query(f"SELECT * FROM {table_name}")
+    if not rows:
+        print(f"  {table_name}: no rows in D1, skipping.")
+        return 0
+
+    columns = list(rows[0].keys())
+    placeholders = ", ".join(["?"] * len(columns))
+    columns_list = ", ".join(columns)
+    insert_sql = f"INSERT OR REPLACE INTO {table_name} ({columns_list}) VALUES ({placeholders})"
+
+    param_rows = [tuple(row.get(col) for col in columns) for row in rows]
+    conn.executemany(insert_sql, param_rows)
+    conn.commit()
+    print(f"  {table_name}: synced {len(param_rows)} row(s).")
+    return len(param_rows)
+
+
+def main():
+    if not cf_d1.is_configured():
+        print("Cloudflare D1 credentials are not configured (see cf_d1.py). Aborting pull.")
+        sys.exit(1)
+
+    conn = db.get_connection()
     try:
-        response = requests.get('https://www.google.com', timeout=5)
-        return response.status_code == 200
-    except requests.ConnectionError:
-        return False
-
-# Check internet connection before proceeding
-if not check_internet_connection():
-    print("No internet connection. Syncing aborted.")
-else:
-    try:
-        # Local MySQL database connection
-        local_conn = mysql.connector.connect(
-            host='localhost',
-            user='root',
-            password='Robot123#',
-            database='robotdb'
-        )
-
-        # AWS RDS MySQL connection
-        master_conn = mysql.connector.connect(
-            host='13.247.23.5',
-            user='robot',
-            password='robot123#',
-            database='robotdb'
-        )
-
-    except Error as e:
-        if e.args[0] == 2003:  # Error code for "Can't connect to MySQL server"
-            print("No internet connection or MySQL server is unreachable.")
-        else:
-            print(f"Error: {e}")
-    else:
-        local_cursor = local_conn.cursor()
-        master_cursor = master_conn.cursor()
-
-        # Fetch all table names from AWS RDS database
-        master_cursor.execute("SHOW TABLES")
-        tables = master_cursor.fetchall()
-
-        excluded_tables = ['device_data', 'modem', 'portal_login']
-        for table in tables:
-            table_name = table[0]
-            if table_name in excluded_tables:
-                print(f"Skipping table: {table_name}")
-                continue  # Skip this table
+        print(f"Pulling reference tables from D1: {', '.join(REFERENCE_TABLES)}")
+        total = 0
+        for table_name in REFERENCE_TABLES:
+            try:
+                total += pull_table(conn, table_name)
+            except cf_d1.D1Error as e:
+                print(f"  {table_name}: FAILED: {e}")
+        print(f"Reference data pull complete. total_rows_synced={total}")
+    finally:
+        conn.close()
 
 
-            print(f"Syncing data from table: {table_name}")
-
-            # Fetch data from each table in AWS RDS database
-            master_cursor.execute(f"SELECT * FROM {table_name}")
-            rows = master_cursor.fetchall()
-
-            # Get column names for the table
-            master_cursor.execute(f"SHOW COLUMNS FROM {table_name}")
-            columns = [f"`{column[0]}`" for column in master_cursor.fetchall()]
-
-            # Prepare insert query for local database with ON DUPLICATE KEY UPDATE
-            placeholders = ', '.join(['%s'] * len(columns))
-            columns_list = ', '.join(columns)
-            update_clause = ', '.join([f"{col}=VALUES({col})" for col in columns])
-            insert_query = f"""
-                INSERT INTO `{table_name}` ({columns_list})
-                VALUES ({placeholders})
-                ON DUPLICATE KEY UPDATE {update_clause}
-            """
-
-            for row in rows:
-                try:
-                    local_cursor.execute(insert_query, row)
-                    local_conn.commit()
-                except Error as e:
-                    print(f"Error inserting data into {table_name}: {e}")
-
-        # Close connections
-        master_cursor.close()
-        master_conn.close()
-        local_cursor.close()
-        local_conn.close()
-
-        print("Data sync complete.")
+if __name__ == "__main__":
+    main()

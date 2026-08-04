@@ -1,87 +1,76 @@
-import socket
-import pymysql
-import time
+"""Manual utility: push one local SQLite table up to Cloudflare D1.
 
-def is_network_reachable(host, port):
+NOTE: this script is not wired into startup/cron/pages.py, and hasn't
+been for a while - the Settings screen's "sync" button only ever ran
+Master.py + cloudSync.py (see pages.py's run_scripts_with_progress).
+bulb_replace, which this script used to push, is now flushed
+automatically by cloudSync.py's sync_bulb_replace() alongside data_q,
+so you normally don't need to run this at all.
+
+It's kept as a standalone tool for ad-hoc pushes - e.g. if you ever add
+a new local table that isn't covered by cloudSync.py yet and want to
+push it up by hand:
+
+    python3 LocalStor.py bulb_replace
+    python3 LocalStor.py some_other_table
+"""
+import sys
+
+import cf_d1
+import db
+
+CHUNK_SIZE = 10  # see cloudSync.py for why this is kept small
+
+
+def push_table(conn, table_name):
+    cur = conn.cursor()
+    cur.execute(f"SELECT * FROM {table_name}")
+    rows = cur.fetchall()
+    if not rows:
+        print(f"No rows found in local table '{table_name}'.")
+        return 0
+
+    columns = rows[0].keys()
+    placeholders = ", ".join(["?"] * len(columns))
+    columns_list = ", ".join(columns)
+    insert_prefix = f"INSERT OR REPLACE INTO {table_name} ({columns_list}) VALUES "
+
+    pushed = 0
+    for i in range(0, len(rows), CHUNK_SIZE):
+        batch = rows[i:i + CHUNK_SIZE]
+        values_parts = []
+        params = []
+        for row in batch:
+            values_parts.append(f"({placeholders})")
+            params.extend(row[col] for col in columns)
+        sql = insert_prefix + ",".join(values_parts)
+        meta = cf_d1.execute(sql, params)
+        pushed += meta.get("changes", meta.get("rows_written", len(batch)))
+        print(f"  Batch {i // CHUNK_SIZE + 1}: pushed {len(batch)} row(s).")
+
+    print(f"Data synced to table '{table_name}' successfully. total_pushed={pushed}")
+    return pushed
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: python3 LocalStor.py <table_name>")
+        sys.exit(1)
+    table_name = sys.argv[1]
+
+    if not cf_d1.is_configured():
+        print("Cloudflare D1 credentials are not configured (see cf_d1.py). Aborting push.")
+        sys.exit(1)
+
+    conn = db.get_connection()
     try:
-        with socket.create_connection((host, port), timeout=5):
-            return True
-    except (socket.timeout, socket.error):
-        return False
+        push_table(conn, table_name)
+    except cf_d1.D1Error as e:
+        print(f"Error pushing '{table_name}' to D1: {e}")
+        sys.exit(1)
+    finally:
+        conn.close()
 
-# Local MariaDB connection
-local_conn = pymysql.connect(
-    host='localhost',
-    user='root',
-    password='Robot123#',
-    database='robotdb'
-)
-
-# AWS RDS MariaDB details
-aws_host = '13.247.23.5'
-aws_port = 3306  # Default MariaDB/MySQL port
-aws_conn = None
-
-def set_transaction_isolation_level(conn):
-    """Set session isolation level to READ UNCOMMITTED to avoid locks."""
-    with conn.cursor() as cursor:
-        cursor.execute("SET SESSION TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;")
-
-def fetch_table_data(conn, table_name):
-    """Fetch all data from a table without locks."""
-    query = f"SELECT * FROM {table_name}"
-    with conn.cursor(pymysql.cursors.DictCursor) as cursor:
-        cursor.execute(query)
-        result = cursor.fetchall()
-    return result
-
-def update_or_insert_data(table_name, table_data, aws_conn):
-    """Update or insert data into the AWS database."""
-    with aws_conn.cursor() as cursor:
-        for row in table_data:
-            columns = ', '.join(row.keys())
-            placeholders = ', '.join(['%s'] * len(row))
-            updates = ', '.join([f"{col} = VALUES({col})" for col in row.keys()])
-            query = f"""
-                INSERT INTO {table_name} ({columns})
-                VALUES ({placeholders})
-                ON DUPLICATE KEY UPDATE {updates}
-            """
-            cursor.execute(query, list(row.values()))
-            aws_conn.commit()
-        print(f"Data synced to table {table_name} successfully.")
 
 if __name__ == "__main__":
-    # Check network connectivity
-    while not is_network_reachable(aws_host, aws_port):
-        print("Network unreachable. Retrying in 10 seconds...")
-        time.sleep(10)
-
-    print("Network reachable. Proceeding with sync...")
-
-    try:
-        # Connect to AWS and set isolation level
-        aws_conn = pymysql.connect(
-            host=aws_host,
-            user='robot',
-            password='robot123#',
-            database='robotdb_dev'
-        )
-        set_transaction_isolation_level(aws_conn)
-
-        # Connect to local database and set isolation level
-        set_transaction_isolation_level(local_conn)
-
-        # Fetch and sync table data
-
-        table_data = fetch_table_data(local_conn, "robotdb.bulb_replace")
-        update_or_insert_data("robotdb.bulb_replace", table_data, aws_conn)
-        print("Sync completed successfully.")
-
-        # Close AWS connection
-        aws_conn.close()
-    except pymysql.MySQLError as e:
-        print(f"Error during sync: {e}")
-
-    # Close local connection
-    local_conn.close()
+    main()

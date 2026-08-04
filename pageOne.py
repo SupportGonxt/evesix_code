@@ -17,7 +17,7 @@ import lgpio
 from datetime import datetime
 from kivy.uix.floatlayout import FloatLayout
 from gpiozero import DistanceSensor
-import mysql.connector
+import db
 import platform
 import shared
 import subprocess
@@ -126,21 +126,16 @@ class PageOne(Screen):
             print(f"[START] Bed ID: {bed_id}")
             print(f"[START] Side: {self.side_selected}")
             
-            mydb = mysql.connector.connect(
-                host="localhost",
-                user="root",
-                password="Robot123#",
-                database="robotdb"
-            )
+            mydb = db.get_connection()
             mycursor = mydb.cursor()
             print("[START] Database connected")
-            
+
             # Insert record with NULL End_date
             sql = """
             INSERT INTO device_data (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side)
-            VALUES (CONCAT(%s, ' ', %s), %s, %s, NULL, %s, %s, %s, %s, %s)
+            VALUES (? || ' ' || ?, ?, ?, NULL, ?, ?, ?, ?, ?)
             """
-            values = (host_N, self.start_time, host_N, self.start_time, 'in_progress', 'Emergency Stop Activated', opID, bed_id, self.side_selected)
+            values = (host_N, self.start_time_str, host_N, self.start_time_str, 'in_progress', 'Emergency Stop Activated', opID, bed_id, self.side_selected)
             mycursor.execute(sql, values)
             mydb.commit()
             
@@ -333,16 +328,11 @@ class PageOne(Screen):
 
     def show_bed(self, instance,value):
         dropdown1 = DropDown()
-        connection = mysql.connector.connect(
-            host='localhost',
-            user='root',
-            password='Robot123#',
-            database='robotdb'
-        )
-        
+        connection = db.get_connection()
+
         cursor = connection.cursor()
             # Define a query to fetch data
-        query = 'SELECT Ward_Id FROM ward WHERE Ward_Name = %s AND Hospital_Id = %s'
+        query = 'SELECT Ward_Id FROM ward WHERE Ward_Name = ? AND Hospital_Id = ?'
         print("hospital Id is")
         print(shared.get_hospitalId())
         param = (value,shared.get_hospitalId(),) # Use a tuple for the parameter
@@ -351,9 +341,9 @@ class PageOne(Screen):
         wardId = result[0]
         shared.set_wardId(wardId)
         print(wardId)
-            
-        
-        query2 = 'SELECT Distinct Space FROM bed WHERE Ward_Id = %s'
+
+
+        query2 = 'SELECT Distinct Space FROM bed WHERE Ward_Id = ?'
         param = (wardId,) # Use a tuple for the parameter
             
         cursor.execute(query2, param)
@@ -567,33 +557,28 @@ class PageOne(Screen):
 
 
         host_Name = platform.node()
-        connection = mysql.connector.connect(
-            host='localhost',
-            user='root',
-            password='Robot123#',
-            database='robotdb'
-        )
-        
+        connection = db.get_connection()
+
         cursor = connection.cursor()
             # Define a query to fetch data
-        query1 = 'SELECT Hospital_Id FROM robot WHERE Serial = %s'
+        query1 = 'SELECT Hospital_Id FROM robot WHERE Serial = ?'
         param = (host_Name,) # Use a tuple for the parameter
         cursor.execute(query1, param)
         resultHosId = cursor.fetchone()
         print(resultHosId[0])
         hosId = resultHosId[0]
         shared.set_hospitalId(hosId)
-        
-        query2 = 'SELECT Hospital_Name, Hospital_Group_Id FROM hospital WHERE Hospital_Id = %s'
+
+        query2 = 'SELECT Hospital_Name, Hospital_Group_Id FROM hospital WHERE Hospital_Id = ?'
         param = (hosId,) # Use a tuple for the parameter
         cursor.execute(query2, param)
         resultHosName = cursor.fetchall()
-        for row in resultHosName: 
+        for row in resultHosName:
             print(row[0], row[1])
             hosName = row[0]
             groupId = row[1]
-        
-        query3 = 'SELECT Group_Name FROM hospital_group WHERE Hospital_Group_Id = %s'
+
+        query3 = 'SELECT Group_Name FROM hospital_group WHERE Hospital_Group_Id = ?'
         param = (groupId,) # Use a tuple for the parameter
         cursor.execute(query3, param)
         resultHosGroup = cursor.fetchone()
@@ -627,16 +612,11 @@ class PageOne(Screen):
 
         # Create dropdown for hospital selection
         dropdown = DropDown()
-        connection = mysql.connector.connect(
-            host='localhost',
-            user='root',
-            password='Robot123#',
-            database='robotdb'
-        )
-        
+        connection = db.get_connection()
+
         cursor = connection.cursor()
             # Define a query to fetch data
-        query = 'SELECT Distinct Ward_Name FROM ward WHERE Hospital_Id = %s'
+        query = 'SELECT Distinct Ward_Name FROM ward WHERE Hospital_Id = ?'
         param = (hosId,) # Use a tuple for the parameter
             
         cursor.execute(query, param)
@@ -706,14 +686,9 @@ class PageOne(Screen):
             
             temp =selected_bed
             
-            mydb = mysql.connector.connect(
-            host="localhost",
-            user="root",
-            password="Robot123#",
-            database="robotdb"
-            )
+            mydb = db.get_connection()
             mycursor = mydb.cursor()
-            query = 'SELECT Bed_Id FROM bed WHERE Space = %s AND Ward_Id = %s'
+            query = 'SELECT Bed_Id FROM bed WHERE Space = ? AND Ward_Id = ?'
             param = (temp,shared.get_wardId(),) # Use a tuple for the parameter
             mycursor.execute(query, param)
             result = mycursor.fetchone()
@@ -997,20 +972,15 @@ class PageOne(Screen):
                     
                     # Save to database without end_time (will be updated when machine restarts)
                     print("[STOP] Connecting to database...")
-                    mydb = mysql.connector.connect(
-                        host="localhost",
-                        user="root",
-                        password="Robot123#",
-                        database="robotdb"
-                    )
+                    mydb = db.get_connection()
                     mycursor = mydb.cursor()
                     print("[STOP] Database connected")
-                    
+
                     sql = """
                     INSERT INTO device_data (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side)
-                    VALUES (CONCAT(%s, ' ', %s), %s, %s, NULL, %s, %s, %s, %s, %s)
+                    VALUES (? || ' ' || ?, ?, ?, NULL, ?, ?, ?, ?, ?)
                     """
-                    values = (host_N, self.start_time, host_N, self.start_time, 'stopped', reason, opID, shared.get_bedId(), self.side_selected)
+                    values = (host_N, self.start_time_str, host_N, self.start_time_str, 'stopped', reason, opID, shared.get_bedId(), self.side_selected)
                     print(f"[STOP] Executing SQL with values: {values}")
                     mycursor.execute(sql, values)
                     mydb.commit()
@@ -1153,6 +1123,9 @@ class PageOne(Screen):
         self.strip.show()
         print("RED LED is activated after interval")
         self.start_time = time.localtime()
+        # SQLite/D1 need an actual date string bound as a parameter, not the
+        # raw struct_time - compute it once here and reuse everywhere below.
+        self.start_time_str = time.strftime('%Y-%m-%d %H:%M:%S', self.start_time)
         print(self.start_time)
         
         # Save start record to database immediately (in case of power loss)
@@ -1262,35 +1235,30 @@ class PageOne(Screen):
                     self.strip.show()
                     print("LEDs turned BLUE after motion detection")
                     self.log_step(6, 'MOTION', 'Opening DB connection for failure record write')
-                    mydb = mysql.connector.connect(
-                    host="localhost",
-                    user="root",
-                    password="Robot123#",
-                    database="robotdb"
-                    )
+                    mydb = db.get_connection()
                     mycursor = mydb.cursor()
                     end_time = time.localtime()
                     print(host_N)
                     opID =shared.get_operatorId()
-                    
+
                     print("op ID is",opID)
                     #sensor.close()
-                    
-                    # Convert end_time to datetime string for MySQL compatibility
+
+                    # Convert end_time to datetime string for SQLite/D1 compatibility
                     end_time_str = time.strftime('%Y-%m-%d %H:%M:%S', end_time)
-                    
+
                     # UPDATE the placeholder record instead of INSERT to avoid duplicates
                     sql = """
-                    UPDATE device_data 
-                    SET D_Number = CONCAT(%s, ' ', %s), End_date = %s, Diagnostic = %s, Code = %s
-                    WHERE Serial = %s AND Start_date = %s AND Diagnostic = 'in_progress'
+                    UPDATE device_data
+                    SET D_Number = ? || ' ' || ?, End_date = ?, Diagnostic = ?, Code = ?
+                    WHERE Serial = ? AND Start_date = ? AND Diagnostic = 'in_progress'
                     """
-                    values = (host_N, end_time_str, end_time_str, 'failed', reason, host_N, self.start_time)
+                    values = (host_N, end_time_str, end_time_str, 'failed', reason, host_N, self.start_time_str)
 
                     mycursor.execute(sql, values)
                     rows_updated = mycursor.rowcount
                     self.log_step(7, 'MOTION', f'Updated placeholder record (rows affected: {rows_updated})')
-                    
+
                     print("Error Working")
                     self.log_step(7, 'MOTION', 'Committing failure record to DB')
                     mydb.commit()
@@ -1298,9 +1266,9 @@ class PageOne(Screen):
                     try:
                         self.log_step('7.1', 'MOTION', 'Queueing failure record into data_q')
                         q_cursor = mydb.cursor()
-                        q_sql = ("INSERT IGNORE INTO data_q (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side, Update_status, Insert_date) "
-                                 "VALUES (CONCAT(%s,' ',%s), %s, %s, %s, %s, %s, %s, %s, %s, 'no', NOW())")
-                        q_values = (host_N, end_time_str, host_N, self.start_time, end_time_str, 'failed', reason, opID, shared.get_bedId(), self.side_selected)
+                        q_sql = ("INSERT OR IGNORE INTO data_q (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side, Update_status, Insert_date) "
+                                 "VALUES (? || ' ' || ?, ?, ?, ?, ?, ?, ?, ?, ?, 'no', datetime('now','localtime'))")
+                        q_values = (host_N, end_time_str, host_N, self.start_time_str, end_time_str, 'failed', reason, opID, shared.get_bedId(), self.side_selected)
                         q_cursor.execute(q_sql, q_values)
                         mydb.commit()
                         self.log_step('7.2', 'MOTION', f'data_q queued (rowcount={q_cursor.rowcount})')
@@ -1387,35 +1355,30 @@ class PageOne(Screen):
                 # Now do database operations (these might block)
                 print("Starting database write...")
                 self.log_step(4, 'SUCCESS', 'Opening DB connection')
-                mydb = mysql.connector.connect(
-                    host='localhost',
-                    user='root',
-                    password="Robot123#",
-                    database="robotdb"
-                    )
+                mydb = db.get_connection()
                 self.log_step(5, 'SUCCESS', 'Creating cursor for success record insert')
                 mycursor = mydb.cursor()
                 end_time = time.localtime()
-                
-                opID =shared.get_operatorId()   
-                 
 
-    
-                # Convert end_time to datetime string for MySQL compatibility
+                opID =shared.get_operatorId()
+
+
+
+                # Convert end_time to datetime string for SQLite/D1 compatibility
                 end_time_str = time.strftime('%Y-%m-%d %H:%M:%S', end_time)
 
                 # UPDATE the placeholder record instead of INSERT to avoid duplicates
                 sql = """
-                UPDATE device_data 
-                SET D_Number = CONCAT(%s, ' ', %s), End_date = %s, Diagnostic = %s, Code = %s
-                WHERE Serial = %s AND Start_date = %s AND Diagnostic = 'in_progress'
+                UPDATE device_data
+                SET D_Number = ? || ' ' || ?, End_date = ?, Diagnostic = ?, Code = ?
+                WHERE Serial = ? AND Start_date = ? AND Diagnostic = 'in_progress'
                 """
-                values = (host_N, end_time_str, end_time_str, 'ok', reason, host_N, self.start_time)
+                values = (host_N, end_time_str, end_time_str, 'ok', reason, host_N, self.start_time_str)
 
                 mycursor.execute(sql, values)
                 rows_updated = mycursor.rowcount
                 self.log_step(6, 'SUCCESS', f'Updated placeholder record (rows affected: {rows_updated})')
-                
+
                 print("Success Working")
                 self.log_step(6, 'SUCCESS', 'Committing success record to DB')
                 mydb.commit()
@@ -1423,9 +1386,9 @@ class PageOne(Screen):
                 try:
                     self.log_step('6.1', 'SUCCESS', 'Queueing success record into data_q')
                     q_cursor = mydb.cursor()
-                    q_sql = ("INSERT IGNORE INTO data_q (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side, Update_status, Insert_date) "
-                             "VALUES (CONCAT(%s,' ',%s), %s, %s, %s, %s, %s, %s, %s, %s, 'no', NOW())")
-                    q_values = (host_N, end_time_str, host_N, self.start_time, end_time_str, 'ok', reason, opID, shared.get_bedId(), self.side_selected)
+                    q_sql = ("INSERT OR IGNORE INTO data_q (D_Number, Serial, Start_date, End_date, Diagnostic, Code, Operator_Id, Bed_Id, Side, Update_status, Insert_date) "
+                             "VALUES (? || ' ' || ?, ?, ?, ?, ?, ?, ?, ?, ?, 'no', datetime('now','localtime'))")
+                    q_values = (host_N, end_time_str, host_N, self.start_time_str, end_time_str, 'ok', reason, opID, shared.get_bedId(), self.side_selected)
                     q_cursor.execute(q_sql, q_values)
                     mydb.commit()
                     self.log_step('6.2', 'SUCCESS', f'data_q queued (rowcount={q_cursor.rowcount})')

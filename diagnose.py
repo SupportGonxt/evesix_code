@@ -16,7 +16,7 @@ from pin_manager import buzzer, sensor
 import psutil
 from datetime import datetime
 from kivy.uix.gridlayout import GridLayout
-import mysql.connector
+import db
 import platform
 from kivy.uix.boxlayout import BoxLayout
 from kivy.graphics import Color, Rectangle
@@ -169,30 +169,25 @@ class Diagnose(TabbedPanel):
         for title in headers:
             table.add_widget(Label(text=title, bold=True))
         
-        mydb = mysql.connector.connect(
-        host='localhost',
-        user='root',
-        password="Robot123#",
-        database="robotdb"
-        )
+        mydb = db.get_connection()
         mycursor = mydb.cursor()
-        
+
         # Add data rows (fill in your own values or logic)
         for i in range(6):
             bulb_num = i + 1
-            host =  platform.node(); 
+            host =  platform.node();
 
-            query ='select COUNT(Bulb_Num) from bulb_replace where Bulb_Num =%s AND Serial = %s'
+            query ='select COUNT(Bulb_Num) from bulb_replace where Bulb_Num = ? AND Serial = ?'
             mycursor.execute(query, (bulb_num, host))
             result = mycursor.fetchone()[0]
             table.add_widget(Label(text=f"Bulb {bulb_num}"))
             table.add_widget(Label(text=f"{result} "))
             # Get the last replacement date for the bulb
             queryUsage = '''
-            SELECT Replacement_date 
-            FROM bulb_replace 
-            WHERE Serial = %s AND Bulb_Num = %s 
-            ORDER BY Replacement_Date DESC 
+            SELECT Replacement_date
+            FROM bulb_replace
+            WHERE Serial = ? AND Bulb_Num = ?
+            ORDER BY Replacement_date DESC
             LIMIT 1
             '''
             mycursor.execute(queryUsage, (host, bulb_num))
@@ -202,12 +197,14 @@ class Diagnose(TabbedPanel):
 
 
 
+            # TIMESTAMPDIFF(MINUTE, a, b) -> (julianday(b) - julianday(a)) * 1440
+            # LEAST(a, b)                -> MIN(a, b) (SQLite's multi-arg min() is scalar, not aggregate)
             if last_record_value == 0:
                 # No replacement record found, calculate total usage hours
                 queryHours = '''
-                SELECT ROUND(SUM(LEAST(TIMESTAMPDIFF(MINUTE, Start_date, End_date), 10)) / 60.0, 2) AS used_hours 
-                FROM device_data 
-                WHERE Serial = %s  
+                SELECT ROUND(SUM(MIN((julianday(End_date) - julianday(Start_date)) * 1440, 10)) / 60.0, 2) AS used_hours
+                FROM device_data
+                WHERE Serial = ?
                 '''
                 mycursor.execute(queryHours, (host,))
                 result = mycursor.fetchone()
@@ -215,10 +212,10 @@ class Diagnose(TabbedPanel):
                 print(f"Bulb {bulb_num} used hours{used_hours}")
             else:
                 queryHours = '''
-                SELECT ROUND(SUM(LEAST(TIMESTAMPDIFF(MINUTE, Start_date, End_date), 10)) / 60.0, 2) AS used_hours 
-                FROM device_data 
-                WHERE Serial = %s AND Start_date > %s
-  
+                SELECT ROUND(SUM(MIN((julianday(End_date) - julianday(Start_date)) * 1440, 10)) / 60.0, 2) AS used_hours
+                FROM device_data
+                WHERE Serial = ? AND Start_date > ?
+
                 '''
                 mycursor.execute(queryHours, (host,last_record_value))
                 result = mycursor.fetchone()

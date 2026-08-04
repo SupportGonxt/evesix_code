@@ -34,3 +34,7 @@ ENV/
 # Misc
 *.log
 .DS_Store
+
+# Secrets - never commit real Cloudflare D1 credentials.
+# d1_config.example.json (placeholders only) stays tracked.
+d1_config.json

@@ -19,7 +19,7 @@ import subprocess
 import os
 import sys
 import threading
-import mysql.connector
+import db
 import time
 import platform
 
@@ -299,25 +299,23 @@ class PageThree(Screen):
         shared.set_usercode(self.usercode.text)
         print(self.usercode.text)
         
-        connection = mysql.connector.connect(
-            host='localhost',
-            user='root',
-            password='Robot123#',
-            database='robotdb'
-        )
-        
+        connection = db.get_connection()
+
         cursor = connection.cursor()
-        cursor.execute('SELECT Operator_Id FROM operator WHERE code = %s', (self.usercode.text,)) 
+        cursor.execute('SELECT Operator_Id FROM operator WHERE code = ?', (self.usercode.text,))
         Operator_Id = cursor.fetchone()
-       
+
         if Operator_Id:
             shared.set_operatorId(Operator_Id[0])
             self.lay.clear_widgets()
             self._admin(instance)
             self.validateInputs.text = ' '
-        else: 
+        else:
             self.validateInputs.text = 'Failed to login'
             print("Login Failed")
+
+        cursor.close()
+        connection.close()
         
     def submit_value(self,v1,v2,v3,v4):
         print("Fetched values before:",shared.get_values())
@@ -369,17 +367,12 @@ class PageThree(Screen):
         
     def save_bulb_replacement_data(self,bulb_num):
         
-        mydb = mysql.connector.connect(
-            host="localhost",
-            user="root",
-            password="Robot123#",
-            database="robotdb"
-        )
+        mydb = db.get_connection()
         mycursor = mydb.cursor()
-        replaement_date = time.localtime()
+        replaement_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
         sql = """
         INSERT INTO bulb_replace (BR_ID, Bulb_Num, Replacement_date, Serial,Sync_status)
-        VALUES (CONCAT(%s, ' ', %s), %s, %s, %s, %s)
+        VALUES (? || ' ' || ?, ?, ?, ?, ?)
         """
         values = (
             platform.node(),

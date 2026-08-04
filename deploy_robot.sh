@@ -172,7 +172,7 @@ if [[ "${USE_CRON}" == "false" ]]; then
   cat > "${SERVICE_FILE}" <<EOF
 [Unit]
 Description=Robot Dashboard Service
-After=network.target mariadb.service
+After=network.target
 
 [Service]
 Type=simple
@@ -213,6 +213,12 @@ echo "App Dir:     ${APP_DIR}"
 echo "Venv:        ${VENV_DIR}" 
 echo "Logs:        ${LOG_DIR}" 
 echo "Startup:     $( [[ "${USE_CRON}" == "true" ]] && echo cron || echo systemd:${SERVICE_NAME})"
+
+if [[ ! -f "${APP_DIR}/d1_config.json" && -z "${CF_ACCOUNT_ID:-}" ]]; then
+  echo "NOTE: Cloudflare D1 is not configured yet - copy ${APP_DIR}/d1_config.example.json"
+  echo "      to ${APP_DIR}/d1_config.json and fill in your account_id/database_id/api_token."
+  echo "      The D1 schema already exists - no setup script needed, just the credentials."
+fi
 
 info "Deployment complete.";
 if [[ "${USE_CRON}" == "false" ]]; then

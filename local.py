@@ -1,80 +1,47 @@
-import pymysql
-import requests
+"""Manual utility: push every locally-generated table up to Cloudflare D1
+in one go.
 
-def check_internet_connection():
+Like LocalStor.py, this script is not wired into startup/cron/pages.py
+- it's an earlier, broader draft of the same idea (push everything
+instead of just one table). Routine syncing is handled automatically by
+cloudSync.py (data_q, bulb_replace). Run this by hand only if you need
+to force a full re-push of every local table, e.g. after recovering
+from an outage:
+
+    python3 local.py
+"""
+import sys
+
+import cf_d1
+import db
+from LocalStor import push_table
+from schema import REFERENCE_TABLES
+
+
+def local_table_names(conn):
+    cur = conn.cursor()
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+    return [row["name"] for row in cur.fetchall()]
+
+
+def main():
+    if not cf_d1.is_configured():
+        print("Cloudflare D1 credentials are not configured (see cf_d1.py). Aborting push.")
+        sys.exit(1)
+
+    conn = db.get_connection()
     try:
-        response = requests.get('https://www.google.com', timeout=5)
-        return response.status_code == 200
-    except requests.ConnectionError:
-        return False
+        tables = [t for t in local_table_names(conn) if t not in REFERENCE_TABLES]
+        print(f"Pushing local tables to D1: {', '.join(tables) or '(none found)'}")
+        for table_name in tables:
+            try:
+                push_table(conn, table_name)
+            except cf_d1.D1Error as e:
+                print(f"  {table_name}: FAILED: {e}")
+        print("Full push complete.")
+    finally:
+        conn.close()
 
-# Check internet connection before proceeding
-if not check_internet_connection():
-    print("No internet connection. Syncing aborted.")
-else:
-    try:
-        # Local MySQL database connection
-        local_conn = pymysql.connect(
-            host='localhost',
-            user='root',
-            password='Robot123#',
-            database='robotdb'
-        )
 
-        # AWS RDS MySQL connection
-        master_conn = pymysql.connect(
-            host='13.247.23.5',
-            user='robot',
-            password='robot123#',
-            database='robotdb'
-        )
-
-    except pymysql.MySQLError as e:
-        if e.args[0] == 2003:  # Error code for "Can't connect to MySQL server"
-            print("No internet connection or MySQL server is unreachable.")
-        else:
-            print(f"Error: {e}")
-    else:
-        local_cursor = local_conn.cursor()
-        master_cursor = master_conn.cursor()
-
-        # Fetch all table names from AWS RDS database
-        local_cursor.execute("SHOW TABLES")
-        tables = local_cursor.fetchall()
-
-        for table in tables:
-            table_name = table[0]
-            print(f"Syncing data from table: {table_name}")
-
-            # Fetch data from each table in AWS RDS database
-            local_cursor.execute(f"SELECT * FROM {table_name}")
-            rows = local_cursor.fetchall()
-
-            # Get column names for the table
-            local_cursor.execute(f"SHOW COLUMNS FROM {table_name}")
-            columns = [f"`{column[0]}`" for column in local_cursor.fetchall()]
-
-            # Prepare insert query for local database with ON DUPLICATE KEY UPDATE
-            placeholders = ', '.join(['%s'] * len(columns))
-            columns_list = ', '.join(columns)
-            update_clause = ', '.join([f"{col}=VALUES({col})" for col in columns])
-            insert_query = f"""
-                INSERT INTO `{table_name}` ({columns_list})
-                VALUES ({placeholders})
-                ON DUPLICATE KEY UPDATE {update_clause}
-            """
-
-            for row in rows:
-                try:
-                    master_cursor.execute(insert_query, row)
-                    master_conn.commit()
-                except pymysql.MySQLError as e:
-                    print(f"Error inserting data into {table_name}: {e}")
-
-        # Close connections
-        local_cursor.close()
-        local_conn.close()
-        master_cursor.close()
-        master_conn.close()
-
-        print("Data sync complete.")
+if __name__ == "__main__":
+    main()
