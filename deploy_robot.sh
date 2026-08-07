@@ -33,6 +33,7 @@ VENV_DIR="${APP_DIR}/.venv"
 LOG_DIR="${APP_DIR}/logs"
 REQUIREMENTS_FILE="requirements.txt"
 CRON_LINE="@reboot sleep 15; /bin/bash -c \"cd ${APP_DIR} && source ${VENV_DIR}/bin/activate && /usr/bin/python3 dashboard.py\" >> ${LOG_DIR}/dashboard.log 2>&1"
+SYNC_CRON_LINE="0 11 * * * /bin/bash ${APP_DIR}/run_master_sync.sh >> ${LOG_DIR}/master_sync.log 2>&1"
 
 ###############################################################################
 print_header() { echo -e "\n===== $* =====\n"; }
@@ -62,6 +63,7 @@ done
 VENV_DIR="${APP_DIR}/.venv"
 LOG_DIR="${APP_DIR}/logs"
 CRON_LINE="@reboot sleep 15; /bin/bash -c \"cd ${APP_DIR} && source ${VENV_DIR}/bin/activate && /usr/bin/python3 dashboard.py\" >> ${LOG_DIR}/dashboard.log 2>&1"
+SYNC_CRON_LINE="0 11 * * * /bin/bash ${APP_DIR}/run_master_sync.sh >> ${LOG_DIR}/master_sync.log 2>&1"
 
 ###############################################################################
 # Pre-flight checks
@@ -159,6 +161,7 @@ fi
 ###############################################################################
 print_header "Logs directory"
 mkdir -p "${LOG_DIR}"
+chmod +x "${APP_DIR}/run_master_sync.sh" 2>/dev/null || true
 
 ###############################################################################
 # (7) Setup systemd OR cron
@@ -204,6 +207,26 @@ else
 fi
 
 ###############################################################################
+# (7b) Daily Master.py reference-data sync (independent of systemd/cron choice
+# above - this always runs via cron since there is no periodic mode for
+# systemd services here). Installed into TARGET_USER's crontab, not root's,
+# since Master.py needs no elevated privileges.
+###############################################################################
+print_header "Master sync cron setup"
+if [[ $(id -u) -eq 0 ]]; then
+  CRON_EDIT=(crontab -u "${TARGET_USER}")
+else
+  CRON_EDIT=(crontab)
+fi
+TMP_SYNC_CRON=$(mktemp)
+"${CRON_EDIT[@]}" -l 2>/dev/null | grep -v 'Master.py' > "${TMP_SYNC_CRON}" || true
+echo "${SYNC_CRON_LINE}" >> "${TMP_SYNC_CRON}"
+"${CRON_EDIT[@]}" "${TMP_SYNC_CRON}"
+rm -f "${TMP_SYNC_CRON}"
+info "Master.py sync scheduled daily at 11:00 for ${TARGET_USER}:"
+"${CRON_EDIT[@]}" -l | grep 'Master.py'
+
+###############################################################################
 # (8) Final summary
 ###############################################################################
 print_header "Summary"
@@ -213,6 +236,7 @@ echo "App Dir:     ${APP_DIR}"
 echo "Venv:        ${VENV_DIR}" 
 echo "Logs:        ${LOG_DIR}" 
 echo "Startup:     $( [[ "${USE_CRON}" == "true" ]] && echo cron || echo systemd:${SERVICE_NAME})"
+echo "Master sync: daily 11:00 (cron, user: ${TARGET_USER})"
 
 if [[ ! -f "${APP_DIR}/d1_config.json" && -z "${CF_ACCOUNT_ID:-}" ]]; then
   echo "NOTE: Cloudflare D1 is not configured yet - copy ${APP_DIR}/d1_config.example.json"

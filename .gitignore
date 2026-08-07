@@ -35,6 +35,10 @@ ENV/
 *.log
 .DS_Store
 
+# Master sync cron guard state (run_master_sync.sh)
+.master_sync_last_run
+.master_sync.lock
+
 # Secrets - never commit real Cloudflare D1 credentials.
 # d1_config.example.json (placeholders only) stays tracked.
 d1_config.json
