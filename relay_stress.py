@@ -1,8 +1,9 @@
 """Relay stress test - fire the relay at a fixed rate and report the timing.
 
-The default profile is the theory we want to test: 100 relay triggers inside
-a 10 second window. That works out to a 100ms period (10 Hz), half of it
-energised and half of it released.
+The default profile is the theory we want to test: 100 relay triggers with
+10 seconds between switching on and switching off again. That is a 20 second
+cycle - 10s energised, 10s released - so a full 100 cycle run takes about
+33 minutes. Shorten it with --cycles while testing.
 
 Same relay and same polarity as the cleaning cycle in pageOne.py: GPIO 20
 driven through lgpio, active LOW (write False = coil energised = "relay on",
@@ -23,9 +24,9 @@ missing every fifth trigger.
 
 It runs standalone over SSH too:
 
-    python3 relay_stress.py                    # 100 triggers over 10 seconds
-    python3 relay_stress.py --repeat 5         # five back-to-back passes
-    python3 relay_stress.py --cycles 50 --window 10
+    python3 relay_stress.py                    # 100 cycles, 10s on / 10s off
+    python3 relay_stress.py --cycles 5         # quick 100 second sanity check
+    python3 relay_stress.py --on 2 --off 2     # faster cycle
     python3 relay_stress.py --dry-run          # no GPIO, just prove the timing
 
 The admin screen parses the "PROGRESS done total" lines below to drive its
@@ -112,11 +113,11 @@ def open_relay(dry_run):
         raise SystemExit(2)
 
 
-def run_pass(relay, cycles, period, on_time, progress_every):
-    """Toggle the relay `cycles` times, one every `period` seconds.
+def run_pass(relay, cycles, on_time, off_time, progress_every):
+    """Cycle the relay `cycles` times: on_time energised, off_time released.
 
     Switch-on moments are scheduled against a fixed start point rather than
-    by sleeping `period` each time round, so one slow cycle does not push
+    by sleeping the period each time round, so one slow cycle does not push
     every later cycle back with it.
 
     The coil always gets its full on_time though - only the release phase
@@ -127,6 +128,7 @@ def run_pass(relay, cycles, period, on_time, progress_every):
 
     Returns the measured stats for the pass.
     """
+    period = on_time + off_time
     start = time.perf_counter()
     on_total = 0.0
     on_min = None
@@ -159,8 +161,8 @@ def run_pass(relay, cycles, period, on_time, progress_every):
         # triggers misbehaved, not just the averages.
         samples.append({
             'n': i + 1,
-            'at_ms': (pulse_start - start) * 1000.0,
-            'on_ms': actual_on * 1000.0,
+            'at_s': pulse_start - start,
+            'on_s': actual_on,
             'overrun_ms': overrun * 1000.0,
         })
 
@@ -174,14 +176,22 @@ def run_pass(relay, cycles, period, on_time, progress_every):
     return {
         'cycles': cycles,
         'elapsed': elapsed,
-        'rate': cycles / elapsed if elapsed > 0 else 0.0,
-        'on_avg_ms': (on_total / cycles) * 1000.0 if cycles else 0.0,
-        'on_min_ms': (on_min or 0.0) * 1000.0,
-        'on_max_ms': on_max * 1000.0,
+        'avg_cycle_s': elapsed / cycles if cycles else 0.0,
+        'on_avg_s': on_total / cycles if cycles else 0.0,
+        'on_min_s': on_min if on_min is not None else 0.0,
+        'on_max_s': on_max,
         'slow_cycles': slow_cycles,
         'worst_overrun_ms': worst_overrun * 1000.0,
         'samples': samples,
     }
+
+
+def format_duration(seconds):
+    """Human duration - runs at 10s on/off are minutes long, not seconds."""
+    if seconds < 90:
+        return f'{seconds:.1f}s'
+    minutes, secs = divmod(int(round(seconds)), 60)
+    return f'{minutes}m {secs:02d}s'
 
 
 def sleep_until(deadline):
@@ -209,15 +219,15 @@ def parse_args(argv):
     parser = argparse.ArgumentParser(description='Stress test the GPIO 20 relay.')
     parser.add_argument('--cycles', type=int, default=100,
                         help='relay triggers per pass (default: 100)')
-    parser.add_argument('--window', type=float, default=10.0,
-                        help='seconds one pass should take (default: 10)')
-    parser.add_argument('--duty', type=float, default=0.5,
-                        help='fraction of each cycle the relay is on (default: 0.5)')
+    parser.add_argument('--on', type=float, default=10.0, dest='on_time',
+                        help='seconds the relay stays energised (default: 10)')
+    parser.add_argument('--off', type=float, default=10.0, dest='off_time',
+                        help='seconds the relay stays released (default: 10)')
     parser.add_argument('--repeat', type=int, default=1,
                         help='number of passes to run (default: 1)')
     parser.add_argument('--rest', type=float, default=0.0,
                         help='seconds to rest between passes (default: 0)')
-    parser.add_argument('--progress-every', type=int, default=10,
+    parser.add_argument('--progress-every', type=int, default=1,
                         help='emit a PROGRESS line every N cycles, 0 to silence')
     parser.add_argument('--dry-run', action='store_true',
                         help='do not touch GPIO, just run and measure the timing')
@@ -227,10 +237,10 @@ def parse_args(argv):
 
     if args.cycles < 1:
         parser.error('--cycles must be at least 1')
-    if args.window <= 0:
-        parser.error('--window must be greater than 0')
-    if not 0.0 < args.duty < 1.0:
-        parser.error('--duty must be between 0 and 1')
+    if args.on_time <= 0:
+        parser.error('--on must be greater than 0')
+    if args.off_time < 0:
+        parser.error('--off cannot be negative')
     if args.repeat < 1:
         parser.error('--repeat must be at least 1')
     return args
@@ -239,12 +249,14 @@ def parse_args(argv):
 def main(argv=None):
     args = parse_args(sys.argv[1:] if argv is None else argv)
 
-    period = args.window / args.cycles
-    on_time = period * args.duty
+    on_time = args.on_time
+    off_time = args.off_time
+    period = on_time + off_time
+    total_estimate = period * args.cycles * args.repeat
 
-    print(f'[relay-test] pin={RELAY_PIN} cycles={args.cycles} window={args.window}s '
-          f'period={period * 1000:.1f}ms on={on_time * 1000:.1f}ms '
-          f'off={(period - on_time) * 1000:.1f}ms repeat={args.repeat}')
+    print(f'[relay-test] pin={RELAY_PIN} cycles={args.cycles} on={on_time:g}s '
+          f'off={off_time:g}s cycle={period:g}s repeat={args.repeat} '
+          f'estimated total {format_duration(total_estimate)}')
     if period * 1000 < MIN_SETTLE_PERIOD_MS:
         print(f'[relay-test] WARNING: {period * 1000:.1f}ms per cycle is below the '
               f'{MIN_SETTLE_PERIOD_MS:.0f}ms a mechanical relay needs to settle - '
@@ -265,13 +277,13 @@ def main(argv=None):
     passes = []
     try:
         for n in range(args.repeat):
-            stats = run_pass(relay, args.cycles, period, on_time, args.progress_every)
+            stats = run_pass(relay, args.cycles, on_time, off_time, args.progress_every)
             passes.append(stats)
             print(f"[relay-test] pass {n + 1}/{args.repeat}: {stats['cycles']} cycles in "
-                  f"{stats['elapsed']:.3f}s -> {stats['rate']:.3f} Hz | pulse "
-                  f"avg {stats['on_avg_ms']:.1f}ms min {stats['on_min_ms']:.1f}ms "
-                  f"max {stats['on_max_ms']:.1f}ms | behind schedule on "
-                  f"{stats['slow_cycles']} cycles (worst "
+                  f"{format_duration(stats['elapsed'])} | cycle avg "
+                  f"{stats['avg_cycle_s']:.3f}s | on avg {stats['on_avg_s']:.3f}s "
+                  f"min {stats['on_min_s']:.3f}s max {stats['on_max_s']:.3f}s | "
+                  f"behind schedule on {stats['slow_cycles']} cycles (worst "
                   f"{stats['worst_overrun_ms']:.1f}ms)", flush=True)
             if args.rest and n + 1 < args.repeat:
                 time.sleep(args.rest)
@@ -283,15 +295,16 @@ def main(argv=None):
 
     total_cycles = sum(p['cycles'] for p in passes)
     total_elapsed = sum(p['elapsed'] for p in passes)
-    shortest_pulse = min((p['on_min_ms'] for p in passes), default=0.0)
+    shortest_pulse = min((p['on_min_s'] for p in passes), default=0.0)
+    longest_pulse = max((p['on_max_s'] for p in passes), default=0.0)
     worst_overrun = max((p['worst_overrun_ms'] for p in passes), default=0.0)
     total_slow = sum(p['slow_cycles'] for p in passes)
     outcome = 'interrupted' if interrupted['flag'] or len(passes) < args.repeat else 'ok'
     result = (f'RESULT {outcome} passes={len(passes)}/{args.repeat} '
               f'cycles={total_cycles} elapsed={total_elapsed:.3f}s '
-              f'rate={total_cycles / total_elapsed if total_elapsed else 0:.3f}Hz '
-              f'pulse_min_ms={shortest_pulse:.1f} slow_cycles={total_slow} '
-              f'worst_overrun_ms={worst_overrun:.1f}'
+              f'avg_cycle_s={total_elapsed / total_cycles if total_cycles else 0:.3f} '
+              f'on_min_s={shortest_pulse:.3f} on_max_s={longest_pulse:.3f} '
+              f'slow_cycles={total_slow} worst_overrun_ms={worst_overrun:.1f}'
               f'{" dry-run" if args.dry_run else ""}')
     print(f'[relay-test] {result}', flush=True)
 
@@ -299,21 +312,21 @@ def main(argv=None):
     # pass measured, then every individual trigger.
     log_lines = [
         '--- relay test run on ' + platform.node() + ' ---',
-        f'request pin={RELAY_PIN} cycles={args.cycles} window={args.window}s '
-        f'period={period * 1000:.1f}ms nominal_on={on_time * 1000:.1f}ms '
+        f'request pin={RELAY_PIN} cycles={args.cycles} on={on_time:g}s '
+        f'off={off_time:g}s cycle={period:g}s '
         f'repeat={args.repeat} dry_run={args.dry_run}',
     ]
     for n, stats in enumerate(passes, start=1):
         log_lines.append(
             f"pass {n}/{args.repeat} cycles={stats['cycles']} "
-            f"elapsed={stats['elapsed']:.3f}s rate={stats['rate']:.3f}Hz "
-            f"on_avg_ms={stats['on_avg_ms']:.1f} on_min_ms={stats['on_min_ms']:.1f} "
-            f"on_max_ms={stats['on_max_ms']:.1f} slow_cycles={stats['slow_cycles']} "
+            f"elapsed={stats['elapsed']:.3f}s avg_cycle_s={stats['avg_cycle_s']:.3f} "
+            f"on_avg_s={stats['on_avg_s']:.3f} on_min_s={stats['on_min_s']:.3f} "
+            f"on_max_s={stats['on_max_s']:.3f} slow_cycles={stats['slow_cycles']} "
             f"worst_overrun_ms={stats['worst_overrun_ms']:.1f}")
         for s in stats['samples']:
             log_lines.append(
-                f"  pass{n} cycle {s['n']:>4} at {s['at_ms']:>9.1f}ms "
-                f"on {s['on_ms']:>7.1f}ms overrun {s['overrun_ms']:>8.1f}ms")
+                f"  pass{n} cycle {s['n']:>4} at {s['at_s']:>9.3f}s "
+                f"on {s['on_s']:>8.3f}s overrun {s['overrun_ms']:>8.1f}ms")
     log_lines.append(result)
     append_log(args.log, log_lines)
     print(f'[relay-test] per-cycle detail appended to {args.log}', flush=True)

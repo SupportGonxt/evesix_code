@@ -3,6 +3,7 @@ from kivy.uix.screenmanager import Screen
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.button import Button
+from kivy.uix.togglebutton import ToggleButton
 from kivy.uix.label import Label
 from kivy.uix.dropdown import DropDown
 from kivy.uix.slider import Slider
@@ -23,11 +24,24 @@ import db
 import time
 import platform
 
-# Profile for the "trigger relay" button on the admin settings screen:
-# 100 relay triggers inside a 10 second window. relay_stress.py takes the
-# same numbers on the command line if a different rate needs testing.
-RELAY_TEST_CYCLES = 100
-RELAY_TEST_WINDOW = 10.0
+# Choices offered by the "trigger relay" button on the admin settings screen.
+# The gap is applied to both halves of the cycle - 10 means 10s energised
+# then 10s released, so one cycle takes twice the gap. relay_stress.py takes
+# any other numbers on the command line.
+RELAY_TEST_CYCLE_OPTIONS = (50, 100, 200, 300)
+RELAY_TEST_CYCLES_DEFAULT = 100
+RELAY_TEST_GAP_OPTIONS = (10, 20, 30, 50)
+RELAY_TEST_GAP_DEFAULT = 10
+
+
+def format_relay_duration(seconds):
+    """Readable run length - the longest profile on offer runs over 8 hours."""
+    if seconds < 90:
+        return f'{seconds:.0f} sec'
+    minutes = seconds / 60.0
+    if minutes < 90:
+        return f'{minutes:.0f} min'
+    return f'{minutes / 60.0:.1f} hours'
 
 
 class PageTwo(Screen):
@@ -499,15 +513,26 @@ class PageThree(Screen):
         self.lay.add_widget(bulb_replacement)    
 
     def confirm_relay_test(self, instance):
-        """Ask first - this drives the relay hard, it is not a settings change."""
-        message = Label(
-            text=(f'Fire the relay {RELAY_TEST_CYCLES} times\n'
-                  f'in {RELAY_TEST_WINDOW:.0f} seconds?\n\n'
-                  'Only run this with the cleaning cycle stopped.'),
-            font_size=18,
-            halign='center',
-            valign='middle')
-        message.bind(size=lambda lbl, val: setattr(lbl, 'text_size', (val[0], None)))
+        """Pick the profile and confirm - this drives the relay hard."""
+        main_layout = BoxLayout(orientation='vertical', spacing=6, padding=10)
+
+        main_layout.add_widget(self._relay_dialog_label('How many triggers?'))
+        cycle_row, self.relay_cycle_buttons = self._relay_option_row(
+            RELAY_TEST_CYCLE_OPTIONS, RELAY_TEST_CYCLES_DEFAULT, 'relay_cycles')
+        main_layout.add_widget(cycle_row)
+
+        main_layout.add_widget(
+            self._relay_dialog_label('Seconds between on and off?'))
+        gap_row, self.relay_gap_buttons = self._relay_option_row(
+            RELAY_TEST_GAP_OPTIONS, RELAY_TEST_GAP_DEFAULT, 'relay_gap')
+        main_layout.add_widget(gap_row)
+
+        self.relay_estimate = Label(text='', font_size=16, halign='center',
+                                    valign='middle')
+        self.relay_estimate.bind(
+            size=lambda lbl, val: setattr(lbl, 'text_size', (val[0], None)))
+        main_layout.add_widget(self.relay_estimate)
+        self.update_relay_estimate()
 
         button_layout = BoxLayout(orientation='horizontal', spacing=10,
                                   size_hint=(1, None), height=50)
@@ -516,23 +541,71 @@ class PageThree(Screen):
         confirm_button = Button(text='Run test', size_hint=(0.5, 1))
         button_layout.add_widget(cancel_button)
         button_layout.add_widget(confirm_button)
-
-        main_layout = BoxLayout(orientation='vertical', spacing=10, padding=10)
-        main_layout.add_widget(message)
         main_layout.add_widget(button_layout)
 
         popup = Popup(title='Relay test', content=main_layout,
-                      size_hint=(None, None), size=(480, 280))
+                      size_hint=(None, None), size=(620, 460))
         cancel_button.bind(on_release=popup.dismiss)
-        confirm_button.bind(on_release=lambda _: (popup.dismiss(), self.start_relay_test()))
+        confirm_button.bind(on_release=lambda _: (
+            popup.dismiss(),
+            self.start_relay_test(self.selected_relay_cycles(),
+                                  self.selected_relay_gap())))
         popup.open()
 
-    def start_relay_test(self):
+    def _relay_dialog_label(self, text):
+        label = Label(text=text, font_size=17, halign='center', valign='middle',
+                      size_hint=(1, None), height=30)
+        label.bind(size=lambda lbl, val: setattr(lbl, 'text_size', (val[0], None)))
+        return label
+
+    def _relay_option_row(self, options, default, group):
+        """A row of toggles where exactly one stays selected."""
+        row = BoxLayout(orientation='horizontal', spacing=6,
+                        size_hint=(1, None), height=55)
+        buttons = []
+        for option in options:
+            btn = ToggleButton(text=str(option), group=group,
+                               allow_no_selection=False,
+                               state='down' if option == default else 'normal')
+            btn.bind(on_release=lambda _: self.update_relay_estimate())
+            row.add_widget(btn)
+            buttons.append(btn)
+        return row, buttons
+
+    def selected_relay_cycles(self):
+        return self._selected_relay_option(self.relay_cycle_buttons,
+                                           RELAY_TEST_CYCLES_DEFAULT)
+
+    def selected_relay_gap(self):
+        return self._selected_relay_option(self.relay_gap_buttons,
+                                           RELAY_TEST_GAP_DEFAULT)
+
+    def _selected_relay_option(self, buttons, fallback):
+        for btn in buttons:
+            if btn.state == 'down':
+                return int(btn.text)
+        return fallback
+
+    def update_relay_estimate(self):
+        cycles = self.selected_relay_cycles()
+        gap = self.selected_relay_gap()
+        total = cycles * gap * 2
+        self.relay_estimate.text = (
+            f'{cycles} triggers, {gap}s on then {gap}s off\n'
+            f'Runs for about {format_relay_duration(total)} and holds this '
+            'screen\nuntil it finishes or you stop it.\n'
+            'Only run with the cleaning cycle stopped.')
+
+    def start_relay_test(self, cycles, gap):
         self.relay_process = None
         self.relay_test_done = False
-        self.relay_progress = ProgressBar(max=RELAY_TEST_CYCLES)
-        self.relay_status = Label(text='Starting relay test...', font_size=16,
-                                  halign='center', valign='middle')
+        self.relay_run_cycles = cycles
+        self.relay_run_gap = gap
+        self.relay_progress = ProgressBar(max=cycles)
+        self.relay_status = Label(
+            text=(f'Starting: {cycles} triggers, {gap}s on / {gap}s off\n'
+                  f'about {format_relay_duration(cycles * gap * 2)}'),
+            font_size=16, halign='center', valign='middle')
         # Without text_size a Label ignores halign and will not wrap the
         # multi-line result summary.
         self.relay_status.bind(
@@ -569,8 +642,9 @@ class PageThree(Screen):
         try:
             self.relay_process = subprocess.Popen(
                 [sys.executable, '-u', script,
-                 '--cycles', str(RELAY_TEST_CYCLES),
-                 '--window', str(RELAY_TEST_WINDOW)],
+                 '--cycles', str(self.relay_run_cycles),
+                 '--on', str(self.relay_run_gap),
+                 '--off', str(self.relay_run_gap)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True)
@@ -609,8 +683,12 @@ class PageThree(Screen):
         Clock.schedule_once(lambda dt: self.finish_relay_test(popup, summary), 0)
 
     def update_relay_test_progress(self, done):
+        # Even the shortest profile runs for minutes - show what is left
+        # rather than just a count.
+        remaining = (self.relay_run_cycles - done) * self.relay_run_gap * 2
         self.relay_progress.value = done
-        self.relay_status.text = f'Triggered {done} of {RELAY_TEST_CYCLES}...'
+        self.relay_status.text = (f'Cycle {done} of {self.relay_run_cycles}\n'
+                                  f'{format_relay_duration(remaining)} remaining')
 
     def finish_relay_test(self, popup, summary):
         self.relay_test_done = True
