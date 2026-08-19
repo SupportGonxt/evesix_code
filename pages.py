@@ -23,6 +23,11 @@ import db
 import time
 import platform
 
+# Profile for the "trigger relay" button on the admin settings screen:
+# 100 relay triggers inside a 10 second window. relay_stress.py takes the
+# same numbers on the command line if a different rate needs testing.
+RELAY_TEST_CYCLES = 100
+RELAY_TEST_WINDOW = 10.0
 
 
 class PageTwo(Screen):
@@ -493,6 +498,140 @@ class PageThree(Screen):
         self.lay.add_widget(sync)
         self.lay.add_widget(bulb_replacement)    
 
+    def confirm_relay_test(self, instance):
+        """Ask first - this drives the relay hard, it is not a settings change."""
+        message = Label(
+            text=(f'Fire the relay {RELAY_TEST_CYCLES} times\n'
+                  f'in {RELAY_TEST_WINDOW:.0f} seconds?\n\n'
+                  'Only run this with the cleaning cycle stopped.'),
+            font_size=18,
+            halign='center',
+            valign='middle')
+        message.bind(size=lambda lbl, val: setattr(lbl, 'text_size', (val[0], None)))
+
+        button_layout = BoxLayout(orientation='horizontal', spacing=10,
+                                  size_hint=(1, None), height=50)
+        cancel_button = Button(text='Cancel', size_hint=(0.5, 1),
+                               background_color=(1, 0, 0, 1))
+        confirm_button = Button(text='Run test', size_hint=(0.5, 1))
+        button_layout.add_widget(cancel_button)
+        button_layout.add_widget(confirm_button)
+
+        main_layout = BoxLayout(orientation='vertical', spacing=10, padding=10)
+        main_layout.add_widget(message)
+        main_layout.add_widget(button_layout)
+
+        popup = Popup(title='Relay test', content=main_layout,
+                      size_hint=(None, None), size=(480, 280))
+        cancel_button.bind(on_release=popup.dismiss)
+        confirm_button.bind(on_release=lambda _: (popup.dismiss(), self.start_relay_test()))
+        popup.open()
+
+    def start_relay_test(self):
+        self.relay_process = None
+        self.relay_test_done = False
+        self.relay_progress = ProgressBar(max=RELAY_TEST_CYCLES)
+        self.relay_status = Label(text='Starting relay test...', font_size=16,
+                                  halign='center', valign='middle')
+        # Without text_size a Label ignores halign and will not wrap the
+        # multi-line result summary.
+        self.relay_status.bind(
+            size=lambda lbl, val: setattr(lbl, 'text_size', (val[0], None)))
+        self.relay_action_btn = Button(text='Stop', size_hint=(1, None), height=50,
+                                       background_color=(1, 0, 0, 1))
+
+        body = BoxLayout(orientation='vertical', spacing=10, padding=10)
+        body.add_widget(self.relay_status)
+        body.add_widget(self.relay_progress)
+        body.add_widget(self.relay_action_btn)
+
+        # No auto_dismiss: tapping outside must not leave the test running
+        # behind a closed popup with no way to stop it.
+        popup = Popup(title='Relay test running', content=body,
+                      size_hint=(0.85, 0.6), auto_dismiss=False)
+        # One handler for both roles - rebinding would mean unbinding an
+        # inline lambda, which Kivy cannot do.
+        self.relay_action_btn.bind(on_release=lambda _: self.relay_action(popup))
+        popup.open()
+
+        self.relay_test_btn.disabled = True
+        threading.Thread(target=self.run_relay_test, args=(popup,), daemon=True).start()
+
+    def run_relay_test(self, popup):
+        """Run relay_stress.py and feed its output back into the popup.
+
+        Kept in a subprocess so the relay is claimed and released outside the
+        touchscreen process, and so Stop can kill it outright.
+        """
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'relay_stress.py')
+        result_line = ''
+        error_line = ''
+        try:
+            self.relay_process = subprocess.Popen(
+                [sys.executable, '-u', script,
+                 '--cycles', str(RELAY_TEST_CYCLES),
+                 '--window', str(RELAY_TEST_WINDOW)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True)
+
+            for raw_line in self.relay_process.stdout:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                # Also lands in logs/dashboard.log for the SSH read-back.
+                print(f'[RelayTest] {line}')
+                if line.startswith('PROGRESS '):
+                    parts = line.split()
+                    try:
+                        done = int(parts[1])
+                    except (IndexError, ValueError):
+                        continue
+                    Clock.schedule_once(
+                        lambda dt, d=done: self.update_relay_test_progress(d), 0)
+                elif 'RESULT ' in line:
+                    result_line = line.split('RESULT ', 1)[1].strip()
+                elif 'ERROR' in line:
+                    error_line = line
+
+            self.relay_process.wait()
+        except Exception as e:
+            error_line = f'could not run relay test: {e}'
+            print(f'[RelayTest] ERROR {error_line}')
+
+        if result_line:
+            summary = f'Finished.\n\n{result_line}\n\nPer-cycle detail:\nlogs/relay_test.log'
+        elif error_line:
+            summary = f'Test failed.\n\n{error_line}'
+        else:
+            summary = 'Test failed - no result reported.\nCheck logs/dashboard.log'
+
+        Clock.schedule_once(lambda dt: self.finish_relay_test(popup, summary), 0)
+
+    def update_relay_test_progress(self, done):
+        self.relay_progress.value = done
+        self.relay_status.text = f'Triggered {done} of {RELAY_TEST_CYCLES}...'
+
+    def finish_relay_test(self, popup, summary):
+        self.relay_test_done = True
+        self.relay_status.text = summary
+        self.relay_test_btn.disabled = False
+        self.relay_action_btn.text = 'Close'
+        self.relay_action_btn.background_color = (1, 1, 1, 1)
+
+    def relay_action(self, popup):
+        """Stop while the test runs, Close once it has reported."""
+        if self.relay_test_done:
+            popup.dismiss()
+        else:
+            self.stop_relay_test()
+
+    def stop_relay_test(self):
+        """Kill the test; relay_stress.py releases the coil on SIGTERM."""
+        if self.relay_process is not None and self.relay_process.poll() is None:
+            self.relay_status.text = 'Stopping...'
+            self.relay_process.terminate()
+
     def _admin(self, instance):
         self.laysend.clear_widgets()
         #self.laysend.remove_widget(self.send)
@@ -508,8 +647,12 @@ class PageThree(Screen):
         self.distance = Label(text=f'maximum distance: {self.sliderdistance.value}', color=(0, 153 / 255, 1, 1))
         self.submit = Button(text='submit changes',color=(0, 153 / 255, 1, 1),on_release=lambda _: self.submit_value(shared.get_distance(), shared.get_threshold(), shared.get_count(), shared.get_time()))
         self.back = Button(text='Back',color=(0, 153 / 255, 1, 1),on_release=self.go_back )
+        # Hardware test, deliberately only reachable from admin settings.
+        self.relay_test_btn = Button(text='trigger relay', color=(0, 153 / 255, 1, 1))
+        self.relay_test_btn.bind(on_release=self.confirm_relay_test)
         button_row = BoxLayout(orientation='horizontal', size_hint=(1, None), height=50)
         button_row.add_widget(self.back)
+        button_row.add_widget(self.relay_test_btn)
         button_row.add_widget(self.submit)
 
         self.threshold = Label(text=f'movement threshold: {self.sliderthreshold.value}',  color=(0, 153 / 255, 1, 1))
