@@ -25,13 +25,15 @@ import time
 import platform
 
 # Choices offered by the "trigger relay" button on the admin settings screen.
-# The gap is applied to both halves of the cycle - 10 means 10s energised
-# then 10s released, so one cycle takes twice the gap. relay_stress.py takes
-# any other numbers on the command line.
+# The gap picked here only sets the energised (on) half of the cycle - the
+# released (off) half is always held at RELAY_TEST_OFF_SECONDS regardless of
+# which gap is picked. relay_stress.py takes any other numbers on the command
+# line.
 RELAY_TEST_CYCLE_OPTIONS = (50, 100, 200, 300)
 RELAY_TEST_CYCLES_DEFAULT = 100
 RELAY_TEST_GAP_OPTIONS = (2, 3, 5, 10, 20)
 RELAY_TEST_GAP_DEFAULT = 10
+RELAY_TEST_OFF_SECONDS = 1
 
 
 def format_relay_duration(seconds):
@@ -522,7 +524,8 @@ class PageThree(Screen):
         main_layout.add_widget(cycle_row)
 
         main_layout.add_widget(
-            self._relay_dialog_label('Seconds between on and off?'))
+            self._relay_dialog_label(
+                f'Seconds on? (off is fixed at {RELAY_TEST_OFF_SECONDS}s)'))
         gap_row, self.relay_gap_buttons = self._relay_option_row(
             RELAY_TEST_GAP_OPTIONS, RELAY_TEST_GAP_DEFAULT, 'relay_gap')
         main_layout.add_widget(gap_row)
@@ -589,9 +592,9 @@ class PageThree(Screen):
     def update_relay_estimate(self):
         cycles = self.selected_relay_cycles()
         gap = self.selected_relay_gap()
-        total = cycles * gap * 2
+        total = cycles * (gap + RELAY_TEST_OFF_SECONDS)
         self.relay_estimate.text = (
-            f'{cycles} triggers, {gap}s on then {gap}s off\n'
+            f'{cycles} triggers, {gap}s on then {RELAY_TEST_OFF_SECONDS}s off\n'
             f'Runs for about {format_relay_duration(total)} and holds this '
             'screen\nuntil it finishes or you stop it.\n'
             'Only run with the cleaning cycle stopped.')
@@ -603,8 +606,9 @@ class PageThree(Screen):
         self.relay_run_gap = gap
         self.relay_progress = ProgressBar(max=cycles)
         self.relay_status = Label(
-            text=(f'Starting: {cycles} triggers, {gap}s on / {gap}s off\n'
-                  f'about {format_relay_duration(cycles * gap * 2)}'),
+            text=(f'Starting: {cycles} triggers, {gap}s on / '
+                  f'{RELAY_TEST_OFF_SECONDS}s off\n'
+                  f'about {format_relay_duration(cycles * (gap + RELAY_TEST_OFF_SECONDS))}'),
             font_size=16, halign='center', valign='middle')
         # Without text_size a Label ignores halign and will not wrap the
         # multi-line result summary.
@@ -644,7 +648,7 @@ class PageThree(Screen):
                 [sys.executable, '-u', script,
                  '--cycles', str(self.relay_run_cycles),
                  '--on', str(self.relay_run_gap),
-                 '--off', str(self.relay_run_gap)],
+                 '--off', str(RELAY_TEST_OFF_SECONDS)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True)
@@ -685,7 +689,7 @@ class PageThree(Screen):
     def update_relay_test_progress(self, done):
         # Even the shortest profile runs for minutes - show what is left
         # rather than just a count.
-        remaining = (self.relay_run_cycles - done) * self.relay_run_gap * 2
+        remaining = (self.relay_run_cycles - done) * (self.relay_run_gap + RELAY_TEST_OFF_SECONDS)
         self.relay_progress.value = done
         self.relay_status.text = (f'Cycle {done} of {self.relay_run_cycles}\n'
                                   f'{format_relay_duration(remaining)} remaining')
