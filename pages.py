@@ -30,7 +30,7 @@ import platform
 # any other numbers on the command line.
 RELAY_TEST_CYCLE_OPTIONS = (50, 100, 200, 300)
 RELAY_TEST_CYCLES_DEFAULT = 100
-RELAY_TEST_GAP_OPTIONS = (10, 20, 30, 50)
+RELAY_TEST_GAP_OPTIONS = (5, 10, 20, 30, 50)
 RELAY_TEST_GAP_DEFAULT = 10
 
 
@@ -544,7 +544,7 @@ class PageThree(Screen):
         main_layout.add_widget(button_layout)
 
         popup = Popup(title='Relay test', content=main_layout,
-                      size_hint=(None, None), size=(620, 460))
+                      size_hint=(None, None), size=(680, 460))
         cancel_button.bind(on_release=popup.dismiss)
         confirm_button.bind(on_release=lambda _: (
             popup.dismiss(),
