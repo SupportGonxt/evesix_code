@@ -1152,6 +1152,8 @@ class PageOne(Screen):
         self.strip.set_all_pixels(Color(255, 0, 0))
         self.strip.show()
         print("RED LED is activated after interval")
+        # Re-apply RED 2s after the timer starts, in case the robot's power draw reset the LEDs
+        Clock.schedule_once(self.reapply_red_leds, 2)
         self.start_time = time.localtime()
         print(self.start_time)
         
@@ -1171,6 +1173,14 @@ class PageOne(Screen):
         
 
     # (Removed stray early GREEN LED block; LEDs stay RED during warm-up.)
+
+    def reapply_red_leds(self, dt):
+        try:
+            self.strip.set_all_pixels(Color(255, 0, 0))
+            self.strip.show()
+            print("RED LED re-applied 2s after timer start")
+        except Exception as e:
+            print(f"Error re-applying RED LEDs: {e}")
 
     
         
