@@ -206,7 +206,16 @@ cd "$NEW_REPO_DIR"
 source "$VENV_DIR/bin/activate"
 
 python3 -c "import kivy; print('Kivy import: OK')" || log "WARNING: Kivy import failed"
-python3 -c "import mysql.connector; print('MySQL import: OK')" || log "WARNING: MySQL import failed"
+python3 -c "import sqlite3; print('sqlite3 import: OK')" || log "WARNING: sqlite3 import failed"
+python3 -c "import requests; print('requests import: OK')" || log "WARNING: requests import failed (needed for Cloudflare D1 sync)"
+
+# Cloudflare D1 credentials check (see cf_d1.py). Either export CF_ACCOUNT_ID /
+# CF_D1_DATABASE_ID / CF_API_TOKEN in this shell, or fill in d1_config.json in
+# $NEW_REPO_DIR (copy d1_config.example.json). Without one of those, cloudSync.py
+# and Master.py will refuse to run.
+if [ ! -f "$NEW_REPO_DIR/d1_config.json" ] && [ -z "${CF_ACCOUNT_ID:-}" ]; then
+    log "WARNING: No d1_config.json found and CF_ACCOUNT_ID is not set - Cloudflare D1 sync will not run until credentials are configured. See d1_config.example.json."
+fi
 
 # Verify critical files exist
 log "Verifying critical files..."

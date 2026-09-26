@@ -5,7 +5,7 @@ from kivy.uix.button import Button
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.screenmanager import ScreenManager, Screen
-import mysql.connector
+import db
 import shared
 
 
@@ -119,34 +119,32 @@ class LoginScreen(Screen):
         shared.set_usercode(self.usercode.text)
         print(self.usercode.text)
         
-        connection = mysql.connector.connect(
-            host='localhost',
-            user='root',
-            password='Robot123#',
-            database='robotdb'
-        )
-        
+        connection = db.get_connection()
+
         cursor = connection.cursor()
-        cursor.execute('SELECT Operator_Id FROM operator WHERE code = %s', (self.usercode.text,)) 
+        cursor.execute('SELECT Operator_Id FROM operator WHERE code = ?', (self.usercode.text,))
         Operator_Id = cursor.fetchone()
-       
+
         if Operator_Id:
             shared.set_operatorId(Operator_Id[0])
             self.manager.current = 'page_one'
             self.validateInputs.text = ' '
-        else: 
+        else:
             self.validateInputs.text = 'Failed to login'
             print("Login Failed")
-        
-        cursor.execute('SELECT Operator_Id FROM operator WHERE code = %s AND Role = %s' , (self.usercode.text,"Developer")) 
+
+        cursor.execute('SELECT Operator_Id FROM operator WHERE code = ? AND Role = ?' , (self.usercode.text,"Developer"))
         Admin_Operator_Id = cursor.fetchone()
         if Admin_Operator_Id:
             shared.set_admin_usercode(Admin_Operator_Id[0])
             self.manager.current = 'page_three'
             self.validateInputs.text = ' '
-        else: 
+        else:
             self.validateInputs.text = 'Failed to login'
             print("Login Failed")
+
+        cursor.close()
+        connection.close()
 
     #def keyboard(self, instance):
       #  self.keySmall = [('q',{"x": 0.54, "y": 0.49},(0.08, 0.1)),('w',{"x": 0.54, "y": 0.49},(0.08, 0.1))]

@@ -10,7 +10,7 @@ from kivy.uix.label import Label
 from pin_manager import cleanup
 import shared
 import psutil
-import mysql.connector
+import db
 import platform
 import time
 import socket
@@ -93,14 +93,9 @@ class Dashboard(BoxLayout):
         self.signal_label = Label(text="Strength: Checking...", size_hint=(None, None), size=(200, 50), 
                                   pos_hint={'right': 0.9, 'top': 0.92})
         
-        start_time = time.localtime() 
-        # Local MySQL database connection
-        local_conn = mysql.connector.connect(
-            host='localhost',
-            user='root',
-            password='Robot123#',
-            database='robotdb'
-        )
+        start_time = time.localtime()
+        # Local SQLite database connection (was: local MySQL connection)
+        local_conn = db.get_connection()
 
         # Create cursor
         mycursor = local_conn.cursor()
@@ -111,12 +106,12 @@ class Dashboard(BoxLayout):
             D_Number, Start_date, End_date, Diagnostic, Code, Serial, Operator_Id, Bed_Id,Side,
             Update_status, Insert_date
         )
-        SELECT 
+        SELECT
             d.D_Number, d.Start_date, d.End_date, d.Diagnostic, d.Code, d.Serial, d.Operator_Id, d.Bed_Id, d.Side,
-            'no', NOW()
+            'no', datetime('now','localtime')
         FROM device_data d
         WHERE NOT EXISTS (
-            SELECT 1 
+            SELECT 1
             FROM data_q q
             WHERE q.D_Number = d.D_Number AND q.Serial = d.Serial
         );
@@ -130,22 +125,24 @@ class Dashboard(BoxLayout):
             mycursor.execute("""
                 SELECT D_Number FROM data_q
                 ORDER BY Insert_date DESC
-                LIMIT %s
+                LIMIT ?
             """, (count,))
             new_rows = mycursor.fetchall()
             start_record = new_rows[0][0]
             end_record = new_rows[-1][0]
-            end_time = time.localtime() 
+            end_time = time.localtime()
 
             sync_insert_query = """
                 INSERT INTO sync_log (
                     Sync_log_Id, Operation_type, Start_date, End_date, Number_Of_Records, Start_record,
                     End_record, Output
-                )   VALUES (CONCAT(%s, ' ', %s), %s, %s, %s, %s, %s, %s, %s)
+                )   VALUES (? || ' ' || ?, ?, ?, ?, ?, ?, ?, ?)
             """
-            values = (platform.node(), end_time,'Data Copy', start_time, end_time, count,start_record, end_record,'Copy Completed')
+            end_time_str = time.strftime('%Y-%m-%d %H:%M:%S', end_time)
+            start_time_str = time.strftime('%Y-%m-%d %H:%M:%S', start_time)
+            values = (platform.node(), end_time_str,'Data Copy', start_time_str, end_time_str, count,start_record, end_record,'Copy Completed')
             mycursor.execute(sync_insert_query, values)
-            print(f"Also inserted  into sync table.")    
+            print(f"Also inserted  into sync table.")
 
         local_conn.commit()
 
