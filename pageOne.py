@@ -1154,9 +1154,9 @@ class PageOne(Screen):
         self.strip.set_all_pixels(Color(255, 0, 0))
         self.strip.show()
         print("RED LED is activated after interval")
-        # Re-apply RED every second for the first minute, in case the robot's power draw resets the LEDs
+        # Re-apply RED every second for the whole cycle, in case the robot's power draw resets the LEDs
         self.stop_red_refresh()
-        self.red_refresh_until = time.time() + 60
+        self.red_refresh_until = time.time() + self.countdown_time
         self.red_refresh_event = Clock.schedule_interval(self.reapply_red_leds, 1)
         self.start_time = time.localtime()
         print(self.start_time)
@@ -1180,7 +1180,7 @@ class PageOne(Screen):
 
     def reapply_red_leds(self, dt):
         if time.time() >= self.red_refresh_until:
-            print("RED LED refresh finished (first minute of cycle)")
+            print("RED LED refresh finished (end of cycle)")
             self.red_refresh_event = None
             return False
         try:
