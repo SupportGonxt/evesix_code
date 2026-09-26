@@ -526,6 +526,7 @@ class PageOne(Screen):
             print("Initial countdown timer stopped")
         
         # Set LEDs to green when going back
+        self.stop_red_refresh()
         try:
             self.strip.set_all_pixels(Color(0, 255, 0))
             self.strip.show()
@@ -1034,6 +1035,7 @@ class PageOne(Screen):
             self.layout.add_widget(self.resume_button)            
             self.timer_event.cancel()
             self.timer_event  = None
+            self.stop_red_refresh()
             self.strip.set_all_pixels(Color(0, 255, 0))
             self.strip.show()
             print("[STOP] Timer stopped, LEDs set to green")
@@ -1152,8 +1154,10 @@ class PageOne(Screen):
         self.strip.set_all_pixels(Color(255, 0, 0))
         self.strip.show()
         print("RED LED is activated after interval")
-        # Re-apply RED 8s after the timer starts, in case the robot's power draw reset the LEDs
-        Clock.schedule_once(self.reapply_red_leds, 8)
+        # Re-apply RED every second for the first minute, in case the robot's power draw resets the LEDs
+        self.stop_red_refresh()
+        self.red_refresh_until = time.time() + 60
+        self.red_refresh_event = Clock.schedule_interval(self.reapply_red_leds, 1)
         self.start_time = time.localtime()
         print(self.start_time)
         
@@ -1175,12 +1179,20 @@ class PageOne(Screen):
     # (Removed stray early GREEN LED block; LEDs stay RED during warm-up.)
 
     def reapply_red_leds(self, dt):
+        if time.time() >= self.red_refresh_until:
+            print("RED LED refresh finished (first minute of cycle)")
+            self.red_refresh_event = None
+            return False
         try:
             self.strip.set_all_pixels(Color(255, 0, 0))
             self.strip.show()
-            print("RED LED re-applied 8s after timer start")
         except Exception as e:
             print(f"Error re-applying RED LEDs: {e}")
+
+    def stop_red_refresh(self):
+        if getattr(self, 'red_refresh_event', None) is not None:
+            self.red_refresh_event.cancel()
+            self.red_refresh_event = None
 
     
         
@@ -1268,6 +1280,7 @@ class PageOne(Screen):
                     #motion_sensor.close()
                     # Set all LEDs to blue after motion detection
                     self.log_step(5, 'MOTION', 'Setting LEDs to BLUE for motion error state')
+                    self.stop_red_refresh()
                     self.strip.set_all_pixels(Color(0, 0, 255))
                     self.strip.show()
                     print("LEDs turned BLUE after motion detection")
@@ -1380,6 +1393,7 @@ class PageOne(Screen):
                 
                 # CRITICAL: Turn LEDs green and update UI FIRST before database operations
                 self.log_step(2, 'SUCCESS', 'Setting LEDs to GREEN for success state')
+                self.stop_red_refresh()
                 self.strip.set_all_pixels(Color(0, 255, 0))  # Turn LEDs GREEN for success
                 self.strip.show()
                 print("LEDs turned GREEN after successful cycle")
